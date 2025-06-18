@@ -9,10 +9,30 @@ import SwiftUI
 
 struct MainTabView: View {
     var body: some View {
-        Text(/*@START_MENU_TOKEN@*/"Hello, World!"/*@END_MENU_TOKEN@*/)
+        TabView {
+            // Tab 1: Pendaftaran Wajah
+            // NavigationStack membungkus RegistrationView
+            NavigationStack {
+                RegistrationView()
+            }
+            .tabItem { // <-- PASTIKAN INI ADA
+                Label("Register", systemImage: "person.badge.plus")
+            }
+            
+            // Tab 2: Scan untuk Presensi
+            ScanView()
+                .tabItem { // <-- PASTIKAN INI ADA
+                    Label("Scan", systemImage: "camera.viewfinder")
+                }
+            
+            // Tab 3: Riwayat Presensi
+            // NavigationStack membungkus HistoryView
+            NavigationStack {
+                HistoryView()
+            }
+            .tabItem { // <-- PASTIKAN INI ADA
+                Label("History", systemImage: "list.bullet.clipboard")
+            }
+        }
     }
-}
-
-#Preview {
-    MainTabView()
 }
