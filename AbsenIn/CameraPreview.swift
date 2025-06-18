@@ -10,6 +10,7 @@ import SwiftUI
 import AVFoundation
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 struct CameraPreview: UIViewRepresentable {
     
     let session: AVCaptureSession
@@ -42,6 +43,8 @@ struct CameraPreview: UIViewRepresentable {
     }
 }
 =======
+=======
+>>>>>>> Stashed changes
 // UIView kustom yang tahu cara me-layout layer-nya.
 class CameraPreviewUIView: UIView {
     
