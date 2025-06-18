@@ -13,7 +13,9 @@ struct WelcomeView: View {
     @State private var navigateToRegistration = false
     // State untuk menampilkan pesan error jika izin ditolak
     @State private var showingPermissionError = false
-    
+
+    @Binding var isUserRegistered: Bool
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
@@ -37,9 +39,15 @@ struct WelcomeView: View {
                 .cornerRadius(10)
             }
             .padding()
+            
             .navigationDestination(isPresented: $navigateToRegistration) {
-                // Arahkan ke RegistrationView saat navigateToRegistration = true
-                RegistrationView()
+                EmptyView() // We don't directly navigate to a view here, but trigger the main App switch
+            }
+            .onChange(of: navigateToRegistration) { oldValue, newValue in
+                if newValue {
+                
+                    isUserRegistered = true
+                }
             }
             .alert("Izin Kamera Dibutuhkan", isPresented: $showingPermissionError) {
                 Button("OK") {}
@@ -48,17 +56,17 @@ struct WelcomeView: View {
             }
         }
     }
-    
+
     // Fungsi untuk meminta izin kamera
     private func requestCameraPermission() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized: // Izin sudah diberikan
-            self.navigateToRegistration = true
+            self.navigateToRegistration = true // This will trigger the onChange and then switch to TabBarView
         case .notDetermined: // Izin belum ditanya
             AVCaptureDevice.requestAccess(for: .video) { granted in
                 DispatchQueue.main.async {
                     if granted {
-                        self.navigateToRegistration = true
+                        self.navigateToRegistration = true // This will trigger the onChange and then switch to TabBarView
                     } else {
                         self.showingPermissionError = true
                     }
