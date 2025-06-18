@@ -29,9 +29,22 @@
 		649B18532E010694006223E6 /* AbsenInUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AbsenInUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		43BDC84A2E0121D400440279 /* Exceptions for "AbsenIn" folder in "AbsenIn" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 649B183B2E010692006223E6 /* AbsenIn */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		649B183E2E010692006223E6 /* AbsenIn */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				43BDC84A2E0121D400440279 /* Exceptions for "AbsenIn" folder in "AbsenIn" target */,
+			);
 			path = AbsenIn;
 			sourceTree = "<group>";
 		};
@@ -397,10 +410,12 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = QMURXCTWQ7;
+				DEVELOPMENT_TEAM = T8X28F7X65;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Aplikasi ini memerlukan akses kamera untuk mendaftarkan wajah Anda dan melakukan presensi harian.";
+				INFOPLIST_FILE = AbsenIn/Info.plist;
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Adding Caputred Photo to Library";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -427,10 +442,12 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = QMURXCTWQ7;
+				DEVELOPMENT_TEAM = T8X28F7X65;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Aplikasi ini memerlukan akses kamera untuk mendaftarkan wajah Anda dan melakukan presensi harian.";
+				INFOPLIST_FILE = AbsenIn/Info.plist;
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Adding Caputred Photo to Library";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
