@@ -6,58 +6,39 @@
 //
 
 import SwiftUI
+import SwiftData
 
-// Enum to represent tabs
-enum Tab {
+enum Tab: Hashable {
     case register
     case attendance
-    case history
 }
 
 struct MainView: View {
+    let isUserRegistered: Bool
     
-    // 1. Pindahkan @StateObject ke view utama ini.
-    // MainView sekarang yang "memiliki" dan mengontrol CameraService.
-    @StateObject private var camera_service = CameraService()
-    
-    // 2. State untuk melacak tab yang sedang aktif.
-    @State private var selected_tab: Tab = .register
-    
+    @Environment(\.modelContext) var modelContext
+    @Query var users: [User]
+    @State private var selectedTab: Tab = .attendance
+
     var body: some View {
-        TabView(selection: $selected_tab) {
-            
-            CameraView(camera_service: camera_service)
-                .tabItem {
-                    Image(systemName: "person.fill.badge.plus")
-                    Text("Register")
-                }
-                .tag(Tab.register)
-            
-            AttendanceView()
-                .tabItem {
-                    Image(systemName: "camera.fill")
-                    Text("Attendance")
-                }
-                .tag(Tab.attendance)
-    
-        }
-        // 4. INI BAGIAN PALING PENTING: Monitor perubahan tab
-        .onChange(of: selected_tab) { newTab in
-            if newTab == .register {
-                camera_service.startSession() // Nyalakan kamera saat tab kamera dipilih
-            } else {
-                camera_service.stopSession() // Matikan kamera saat beralih ke tab lain
+        if isUserRegistered {
+            TabView(selection: $selectedTab) {
+                RegistrationView()
+                    .tabItem {
+                        Image(systemName: "person.fill.badge.plus")
+                        Text("Register")
+                    }
+                    .tag(Tab.register)
+                
+                AttendanceView(users: users, modelContext: modelContext)
+                    .tabItem {
+                        Image(systemName: "camera.fill")
+                        Text("Attendance")
+                    }
+                    .tag(Tab.attendance)
             }
-        }
-        .onAppear {
-            // Saat view pertama kali muncul, jika tab default adalah kamera, nyalakan session.
-            if selected_tab == .register {
-                camera_service.startSession()
-            }
+        } else {
+            WelcomeView()
         }
     }
-}
-
-#Preview {
-    MainView()
 }

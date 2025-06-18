@@ -8,16 +8,6 @@
 import SwiftUI
 import SwiftData
 
-struct AttendanceContainerView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var users: [User]
-
-    var body: some View {
-        // View ini punya akses ke environment, lalu membuat dan meneruskannya
-        AttendanceView(users: users, modelContext: modelContext)
-    }
-}
-
 @main
 struct AbsenInApp: App {
     
@@ -34,13 +24,7 @@ struct AbsenInApp: App {
 
     var body: some Scene {
         WindowGroup {
-            // Jika ada pengguna terdaftar, langsung ke AttendanceView
-            // Jika tidak, mulai dari WelcomeView
-            if isUserRegistered {
-                AttendanceContainerView()
-            } else {
-                WelcomeView()
-            }
+            MainView(isUserRegistered: isUserRegistered)
         }
         .modelContainer(for: [User.self, AttendanceRecord.self]) // Daftarkan semua model di sini
     }

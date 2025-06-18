@@ -2,132 +2,55 @@
 //  CameraService.swift
 //  AbsenIn
 //
-//  Created by Hayya U on 17/06/25.
+//  Created by Hayya U on 18/06/25.
 //
-
-import Foundation
 import AVFoundation
-import Combine // Import Combine to use @Published
 
-class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
-    
+class CameraService {
     var session = AVCaptureSession()
-    private var photo_output = AVCapturePhotoOutput()
-    private var current_camera_position: AVCaptureDevice.Position = .back
+    var delegate: AVCapturePhotoCaptureDelegate?
+    let output = AVCapturePhotoOutput()
+    // Kita tidak perlu lagi properti 'preview' di sini karena sudah dikelola oleh CameraPreviewUIView
+    // var preview = AVCaptureVideoPreviewLayer() // << HAPUS ATAU KOMENTARI BARIS INI
     
-    @Published var photo_data: Data?
-
-    override init() {
-        super.init()
-        checkPermissions()
+    func start(delegate: AVCapturePhotoCaptureDelegate, completion: @escaping (Error?) -> ()) {
+        self.delegate = delegate
+        checkPermissions(completion: completion)
     }
     
-    // Function to check camera permissions
-    private func checkPermissions() {
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized:
-            setupSession()
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-                if granted {
-                    DispatchQueue.main.async {
-                        self?.setupSession()
-                    }
-                }
-            }
-        default:
-            print("Camera Permission Denied")
-        }
+    private func checkPermissions(completion: @escaping (Error?) -> ()) {
+        setupCamera(completion: completion)
     }
     
-    // function to setup camera session
-    private func setupSession() {
-        session.beginConfiguration()
-        session.sessionPreset = .photo
-
-        // Input
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: current_camera_position),
+    private func setupCamera(completion: @escaping (Error?) -> ()) {
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
               let input = try? AVCaptureDeviceInput(device: device) else {
-            print("Could not find camera for position: \(current_camera_position)")
-            session.commitConfiguration()
+            print("Front camera is not available.")
             return
         }
         
-        // Output
-        if session.canAddInput(input) && session.canAddOutput(photo_output) {
-            session.addInput(input)
-            session.addOutput(photo_output)
-        }
-        
-        session.commitConfiguration()
-    }
-    
-    // Function to Start session
-    func startSession() {
-        if !session.isRunning {
-            DispatchQueue.global(qos: .userInitiated).async {
-                self.session.startRunning()
-            }
-        }
-    }
-    
-    // Function to Stop session
-    func stopSession() {
-        if session.isRunning {
-            session.stopRunning()
-        }
-    }
-    
-    func flipCamera() {
-        // Tentukan posisi kamera baru
-        let new_position: AVCaptureDevice.Position = (current_camera_position == .back) ? .front : .back
-        
-        // Find camera for the new input position
-        guard let new_device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: new_position) else {
-            print("Could not find camera for position: \(new_position)")
-            return
-        }
-        
-        // start session configuration
         session.beginConfiguration()
         
-        // delete the old input
-        if let current_input = session.inputs.first {
-            session.removeInput(current_input)
-        }
+        if session.canAddInput(input) { session.addInput(input) }
+        if session.canAddOutput(output) { session.addOutput(output) }
         
-        // add the new input
-        do {
-            let new_input = try AVCaptureDeviceInput(device: new_device)
-            if session.canAddInput(new_input) {
-                session.addInput(new_input)
-                // Update current camera position
-                self.current_camera_position = new_position
-            }
-        } catch {
-            print("Failed to create new camera input: \(error.localizedDescription)")
-        }
-        
-        // Selesaikan konfigurasi session
+        session.sessionPreset = .photo
         session.commitConfiguration()
+        
+        // Kita tidak lagi mengatur 'preview.session' di sini, karena sudah dilakukan di init CameraPreviewUIView
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.session.startRunning()
+        }
     }
     
     func capturePhoto() {
-        let settings = AVCapturePhotoSettings()
-        // Call delegate in it's own class
-        photo_output.capturePhoto(with: settings, delegate: self)
-    }
-    
-    // Delegate method from AVCapturePhotoCaptureDelegate
-    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        guard let data = photo.fileDataRepresentation() else {
-            print("Coulndn't get data from photo \(error?.localizedDescription ?? "Error Unknown")")
+        guard let delegate = self.delegate else {
+            print("Camera delegate is not set.")
             return
         }
-        
-        // publish photo data using @Published property
-        DispatchQueue.main.async {
-            self.photo_data = data
-        }
+        let settings = AVCapturePhotoSettings()
+        output.capturePhoto(with: settings, delegate: delegate)
     }
 }
+
