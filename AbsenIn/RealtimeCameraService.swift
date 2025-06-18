@@ -7,52 +7,59 @@
 
 import AVFoundation
 import Vision
-import CoreImage
+import SwiftUI
 
-protocol FaceRecognitionDelegate: AnyObject {
-    // Diubah untuk mengirimkan Array dari User, untuk mendukung multi-wajah
-    func didRecognize(users: [User])
-    func didFailToRecognize()
+// Delegate yang lebih sederhana dan jelas
+protocol RealtimeCameraServiceDelegate: AnyObject {
+    @MainActor
+    func cameraService(didDetectFaces faces: [DetectedFace], videoDimensions: CMVideoDimensions?)
 }
 
 class RealtimeCameraService: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     
-    weak var delegate: FaceRecognitionDelegate?
-    
     let session = AVCaptureSession()
-    private var registeredUsers: [User] = []
-    private var recentlyRecognizedIDs = Set<String>()
+    weak var delegate: RealtimeCameraServiceDelegate?
     
-    // Flag untuk mencegah penumpukan frame processing
+    private var registeredUsers: [User] = []
     private var isProcessingFrame = false
-
-    func startSession(registeredUsers: [User]) {
-        self.registeredUsers = registeredUsers
-        guard !session.isRunning else { return }
-        
+    private var videoDimensions: CMVideoDimensions?
+    
+    override init() {
+        super.init()
+        setupSession()
+    }
+    
+    func updateRegisteredUsers(_ users: [User]) {
+        self.registeredUsers = users
+    }
+    
+    private func setupSession() {
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
-            print("No front camera found"); return
+            print("Kamera depan tidak ditemukan.")
+            return
         }
         
         do {
             let input = try AVCaptureDeviceInput(device: device)
             let videoOutput = AVCaptureVideoDataOutput()
             videoOutput.alwaysDiscardsLateVideoFrames = true
+            // Jalankan pada antrian background dengan prioritas tinggi
             videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue", qos: .userInitiated))
-
+            
             session.beginConfiguration()
-            session.inputs.forEach { session.removeInput($0) }
-            session.outputs.forEach { session.removeOutput($0) }
             if session.canAddInput(input) { session.addInput(input) }
             if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
             session.sessionPreset = .hd1280x720
             session.commitConfiguration()
-            
-            DispatchQueue.global(qos: .userInitiated).async {
-                self.session.startRunning()
-            }
         } catch {
-            print("Failed to set up camera: \(error.localizedDescription)")
+            print("Gagal setup kamera: \(error)")
+        }
+    }
+    
+    func startSession() {
+        guard !session.isRunning else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.session.startRunning()
         }
     }
     
@@ -61,106 +68,130 @@ class RealtimeCameraService: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
             session.stopRunning()
         }
     }
-
+    
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard !isProcessingFrame else { return }
-        self.isProcessingFrame = true
         
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            self.isProcessingFrame = false
             return
         }
-
+        
+        isProcessingFrame = true
+        
+        if self.videoDimensions == nil, let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) {
+            self.videoDimensions = CMVideoFormatDescriptionGetDimensions(formatDescription)
+        }
+        
         let faceDetectionRequest = VNDetectFaceRectanglesRequest { (request, error) in
-            defer {
-                // Pastikan flag selalu di-reset di akhir
-                DispatchQueue.main.async {
-                    self.isProcessingFrame = false
-                }
-            }
+            defer { self.isProcessingFrame = false }
             
             guard let faceObservations = request.results as? [VNFaceObservation], !faceObservations.isEmpty else {
-                DispatchQueue.main.async { self.delegate?.didFailToRecognize() }
+                // Jika tidak ada wajah, kirim array kosong ke delegate untuk membersihkan UI
+                DispatchQueue.main.async {
+                    self.delegate?.cameraService(didDetectFaces: [], videoDimensions: self.videoDimensions)
+                }
                 return
             }
             
-            // Proses semua wajah yang ditemukan secara paralel
-            var recognizedUsersInFrame: [User] = []
+            var detectedFacesInFrame: [DetectedFace] = []
             let dispatchGroup = DispatchGroup()
-
+            
             for faceObservation in faceObservations {
                 dispatchGroup.enter()
-                self.findBestMatch(for: faceObservation, in: pixelBuffer) { bestMatchUser in
-                    if let user = bestMatchUser {
-                        recognizedUsersInFrame.append(user)
+                self.process(faceObservation, in: pixelBuffer) { detectedFace in
+                    if let face = detectedFace {
+                        detectedFacesInFrame.append(face)
                     }
                     dispatchGroup.leave()
                 }
             }
             
-            // Setelah semua perbandingan selesai...
             dispatchGroup.notify(queue: .main) {
-                if !recognizedUsersInFrame.isEmpty {
-                    let newRecognitions = recognizedUsersInFrame.filter { !self.recentlyRecognizedIDs.contains($0.id) }
-                    
-                    if !newRecognitions.isEmpty {
-                        newRecognitions.forEach { self.recentlyRecognizedIDs.insert($0.id) }
-                        self.delegate?.didRecognize(users: newRecognitions)
-
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                            newRecognitions.forEach { self.recentlyRecognizedIDs.remove($0.id) }
-                        }
-                    }
-                } else {
-                    // Ada wajah, tapi tidak ada yang cocok
-                    self.delegate?.didFailToRecognize()
-                }
+                self.delegate?.cameraService(didDetectFaces: detectedFacesInFrame, videoDimensions: self.videoDimensions)
             }
         }
         
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
-        try? handler.perform([faceDetectionRequest])
-    }
-    
-    private func findBestMatch(for faceObservation: VNFaceObservation, in pixelBuffer: CVPixelBuffer, completion: @escaping (User?) -> Void) {
-        let originalImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let boundingBox = faceObservation.boundingBox
-        let faceImageRect = VNImageRectForNormalizedRect(boundingBox, Int(originalImage.extent.width), Int(originalImage.extent.height))
-        let croppedFaceImage = originalImage.cropped(to: faceImageRect)
-
-        let featureprintRequest = VNGenerateImageFeaturePrintRequest()
+        // Menggunakan revisi ke-3 untuk deteksi yang lebih akurat dan stabil.
+        faceDetectionRequest.revision = VNDetectFaceRectanglesRequestRevision3
         
         do {
-            let handler = VNImageRequestHandler(ciImage: croppedFaceImage, options: [:])
+            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
+            try handler.perform([faceDetectionRequest])
+        } catch {
+            print("Gagal melakukan request deteksi wajah: \(error)")
+            isProcessingFrame = false
+        }
+    }
+    
+    private func process(_ faceObservation: VNFaceObservation, in pixelBuffer: CVPixelBuffer, completion: @escaping (DetectedFace?) -> Void) {
+        // Pastikan bounding box valid untuk mencegah crash
+        let validBoundingBox = faceObservation.boundingBox.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+        
+        // PERBAIKAN: Menggunakan .isEmpty untuk validasi CGRect yang benar.
+        guard !validBoundingBox.isEmpty else {
+            completion(nil)
+            return
+        }
+        
+        let featureprintRequest = VNGenerateImageFeaturePrintRequest()
+        featureprintRequest.regionOfInterest = validBoundingBox
+        
+        do {
+            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
             try handler.perform([featureprintRequest])
-
+            
             guard let detectedFeaturePrint = featureprintRequest.results?.first as? VNFeaturePrintObservation else {
                 completion(nil)
                 return
             }
             
-            // --- PERBAIKAN AKURASI UTAMA ADA DI SINI ---
-            let bestMatch = registeredUsers.compactMap { user -> (user: User, distance: Float)? in
+            var bestMatch: (user: User, distance: Float)? = nil
+            
+            // Bandingkan dengan SEMUA sidik jari yang tersimpan untuk setiap pengguna.
+            for user in registeredUsers {
                 guard let storedData = user.faceprintData,
-                      let storedPrint = try? NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(storedData) as? VNFeaturePrintObservation else { return nil }
-
-                var distance: Float = .greatestFiniteMagnitude
-                do {
+                      // Unarchive sebagai array [VNFeaturePrintObservation].
+                      let storedPrints = try? NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(storedData) as? [VNFeaturePrintObservation] else { continue }
+                
+                var lowestDistanceForThisUser: Float = .greatestFiniteMagnitude
+                
+                // Cari jarak terendah dari semua sidik jari yang dimiliki pengguna ini.
+                for storedPrint in storedPrints {
+                    var distance: Float = .greatestFiniteMagnitude
                     try detectedFeaturePrint.computeDistance(&distance, to: storedPrint)
-                    return (user, distance)
-                } catch {
-                    // Gagal membandingkan, anggap tidak cocok
-                    return nil
+                    if distance < lowestDistanceForThisUser {
+                        lowestDistanceForThisUser = distance
+                    }
+                }
+                
+                // Threshold pengenalan (nilai lebih rendah = lebih ketat). 0.8 adalah titik awal yang baik.
+                let recognitionThreshold: Float = 0.8
+                
+                if lowestDistanceForThisUser < recognitionThreshold && (bestMatch == nil || lowestDistanceForThisUser < bestMatch!.distance) {
+                    bestMatch = (user, lowestDistanceForThisUser)
                 }
             }
-            // Filter dengan threshold yang lebih ketat dan ambil yang terbaik
-            .filter { $0.distance < 0.65 } // << THRESHOLD DIPERKETAT
-            .min(by: { $0.distance < $1.distance })
             
-            completion(bestMatch?.user)
-
+            let face: DetectedFace
+            if let match = bestMatch {
+                face = DetectedFace(
+                    boundingBox: faceObservation.boundingBox,
+                    name: match.user.name,
+                    color: .green,
+                    recognizedUser: match.user
+                )
+            } else {
+                face = DetectedFace(
+                    boundingBox: faceObservation.boundingBox,
+                    name: "Tidak Dikenali",
+                    color: .red,
+                    recognizedUser: nil
+                )
+            }
+            completion(face)
+            
         } catch {
-            print("Failed to generate feature print for a face: \(error)")
+            print("Gagal memproses wajah: \(error)")
             completion(nil)
         }
     }
