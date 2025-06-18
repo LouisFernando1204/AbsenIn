@@ -20,37 +20,37 @@ struct AttendanceContainerView: View {
 
 @main
 struct AbsenInApp: App {
-
-    // State to track if the user is registered. This will drive the initial view.
     @State private var isUserRegistered: Bool
+    private let sharedModelContainer: ModelContainer
 
     init() {
-        // Initialize with a default value. The actual check will happen in onAppear of the WelcomeView
-        // or a similar mechanism if we were not using @State here directly dependent on the initial check.
-        // For the purpose of setting up the initial @State, we can do a quick check.
         var registered = false
+        var tempContainer: ModelContainer!
+
         do {
-            let container = try ModelContainer(for: User.self)
+            let schema = Schema([User.self, AttendanceRecord.self])
+            let config = ModelConfiguration("AbsenInModel") // beri nama yang konsisten
+            tempContainer = try ModelContainer(for: schema, configurations: [config])
             let fetchDescriptor = FetchDescriptor<User>()
-            let count = try container.mainContext.fetchCount(fetchDescriptor)
+            let count = try tempContainer.mainContext.fetchCount(fetchDescriptor)
             registered = count > 0
         } catch {
-            print("Failed to check user registration status: \(error)")
+            print("Failed to initialize model container or fetch user count: \(error)")
         }
-        _isUserRegistered = State(initialValue: registered) // Initialize @State directly
+
+        self.sharedModelContainer = tempContainer
+        _isUserRegistered = State(initialValue: registered)
     }
 
     var body: some Scene {
         WindowGroup {
-            
             if isUserRegistered {
                 TabBarView()
+                    .modelContainer(sharedModelContainer)
             } else {
-                // If not registered, show the WelcomeView.
-                // WelcomeView will handle its own navigation to RegistrationView.
                 WelcomeView(isUserRegistered: $isUserRegistered)
+                    .modelContainer(sharedModelContainer)
             }
         }
-        .modelContainer(for: [User.self, AttendanceRecord.self]) // Register all models here
     }
 }

@@ -45,17 +45,5 @@ struct HistoryView: View {
 }
 
 #Preview {
-    HistoryView()
-        .modelContainer(for: AttendanceRecord.self, inMemory: true) { result in
-            switch result {
-            case .success(let container):
-                container.mainContext.insert(AttendanceRecord(userID: UUID().uuidString, userName: "John Doe", timestamp: Date().addingTimeInterval(-3600 * 24 * 2)))
-                container.mainContext.insert(AttendanceRecord(userID: UUID().uuidString, userName: "Jane Smith", timestamp: Date().addingTimeInterval(-3600 * 24 * 1)))
-                container.mainContext.insert(AttendanceRecord(userID: UUID().uuidString, userName: "John Doe", timestamp: Date().addingTimeInterval(-3600 * 12)))
-                container.mainContext.insert(AttendanceRecord(userID: UUID().uuidString, userName: "Jane Smith", timestamp: Date()))
-            case .failure(let error):
-                // Handle the error, e.g., print it or show an alert in a real app
-                fatalError("Failed to create ModelContainer for preview: \(error.localizedDescription)")
-            }
-        }
+    
 }
