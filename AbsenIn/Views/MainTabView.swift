@@ -15,22 +15,21 @@ struct MainTabView: View {
             NavigationStack {
                 RegistrationView()
             }
-            .tabItem { // <-- PASTIKAN INI ADA
+            .tabItem {
                 Label("Register", systemImage: "person.badge.plus")
             }
             
             // Tab 2: Scan untuk Presensi
             ScanView()
-                .tabItem { // <-- PASTIKAN INI ADA
+                .tabItem {
                     Label("Scan", systemImage: "camera.viewfinder")
                 }
             
             // Tab 3: Riwayat Presensi
-            // NavigationStack membungkus HistoryView
             NavigationStack {
                 HistoryView()
             }
-            .tabItem { // <-- PASTIKAN INI ADA
+            .tabItem {
                 Label("History", systemImage: "list.bullet.clipboard")
             }
         }
