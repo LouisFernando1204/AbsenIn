@@ -10,7 +10,10 @@ struct ScanView: View {
     
     var body: some View {
         ZStack {
-            CameraPreview(session: viewModel.cameraService.session)
+            CameraPreview(
+                session: viewModel.cameraService.session,
+                videoDevice: viewModel.cameraService.videoDevice
+            )
                 .ignoresSafeArea()
             
             // PERBAIKAN UI: Menghapus bounding box dan menggunakan overlay lingkaran.

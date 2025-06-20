@@ -3,36 +3,18 @@ import Vision
 import SwiftUI
 import UIKit
 
-extension UIDeviceOrientation {
-    var videoOrientation: AVCaptureVideoOrientation {
-        switch self {
-        case .portrait: return .portrait
-        case .portraitUpsideDown: return .portraitUpsideDown
-        case .landscapeLeft: return .landscapeRight
-        case .landscapeRight: return .landscapeLeft
-        default: return .portrait
-        }
-    }
-    
-    var visionOrientation: CGImagePropertyOrientation {
-        switch self {
-        case .portrait: return .right
-        case .portraitUpsideDown: return .left
-        case .landscapeLeft: return .up
-        case .landscapeRight: return .down
-        default: return .right
-        }
-    }
-}
-
+// PERUBAHAN 1: Struct DetectedFace tidak lagi digunakan oleh delegate ini,
+// namun bisa dipertahankan jika digunakan di tempat lain.
 struct DetectedFace: Identifiable {
     let id = UUID()
     let boundingBox: CGRect
     let recognizedUser: User?
 }
 
+// PERUBAHAN 2: Ubah delegate untuk mengirim data yang lebih kaya.
+// Ini memungkinkan ViewModel untuk melakukan liveness check (deteksi kedipan).
 protocol RealtimeCameraServiceDelegate: AnyObject {
-    @MainActor func cameraService(didDetect faces: [DetectedFace])
+    @MainActor func cameraService(didDetect observations: [VNFaceObservation], recognizedUsers: [UUID: User?])
 }
 
 struct CachedUser {
@@ -45,13 +27,11 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     let session = AVCaptureSession()
     weak var delegate: RealtimeCameraServiceDelegate?
     
+    private(set) var videoDevice: AVCaptureDevice?
     private var isPrepared = false
-    private let recognitionThreshold: Float = 0.08
     
-    // PERBAIKAN UTAMA: Parameter baru untuk mencegah salah identifikasi.
-    // Ini adalah jarak minimal yang dibutuhkan antara kandidat terbaik #1 dan #2.
-    // Naikkan nilai ini untuk membuatnya lebih ketat.
-    private let ambiguityRejectionThreshold: Float = 0.05
+    private let recognitionThreshold: Float = 0.09
+    private let ambiguityRejectionThreshold: Float = 0.06
     
     private var cachedUsers: [CachedUser] = []
     private var isProcessingFrame = false
@@ -78,15 +58,20 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     private func setupSession() -> Bool {
         session.beginConfiguration()
         defer { session.commitConfiguration() }
+        
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else { return false }
+        self.videoDevice = device
+        
         do {
             let input = try AVCaptureDeviceInput(device: device)
             if session.canAddInput(input) { session.addInput(input) } else { return false }
         } catch { print("Gagal membuat input kamera: \(error)"); return false }
+        
         let videoOutput = AVCaptureVideoDataOutput()
         videoOutput.alwaysDiscardsLateVideoFrames = true
         videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue", qos: .userInitiated))
         if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) } else { return false }
+        
         session.sessionPreset = .hd1920x1080
         return true
     }
@@ -104,13 +89,13 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         guard !isProcessingFrame, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         isProcessingFrame = true
         
-        let visionOrientation = UIDevice.current.orientation.visionOrientation
+        let visionOrientation = visionOrientation(for: connection.videoRotationAngle)
 
         let faceLandmarksRequest = VNDetectFaceLandmarksRequest { (request, error) in
             defer { self.isProcessingFrame = false }
             
             guard let faceObservations = request.results as? [VNFaceObservation] else {
-                DispatchQueue.main.async { self.delegate?.cameraService(didDetect: []) }
+                DispatchQueue.main.async { self.delegate?.cameraService(didDetect: [], recognizedUsers: [:]) }
                 return
             }
             
@@ -124,84 +109,89 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         }
     }
     
+    // PERUBAHAN 3: Ubah fungsi process untuk memanggil delegate yang baru.
     private func process(faceObservations: [VNFaceObservation]) {
         if faceObservations.isEmpty {
-            DispatchQueue.main.async { self.delegate?.cameraService(didDetect: []) }
+            DispatchQueue.main.async {
+                self.delegate?.cameraService(didDetect: [], recognizedUsers: [:])
+            }
             return
         }
         
+        var recognitionResults: [UUID: User?] = [:]
         let dispatchGroup = DispatchGroup()
-        var recognitionResults: [DetectedFace] = []
-        
+
         for face in faceObservations {
             dispatchGroup.enter()
-            
             guard let landmarks = face.landmarks, let liveVector = landmarks.toFacialVector() else {
+                recognitionResults[face.uuid] = nil
                 dispatchGroup.leave()
                 continue
             }
             
             let recognizedUser = self.verify(liveVector: liveVector)
-            recognitionResults.append(DetectedFace(boundingBox: face.boundingBox, recognizedUser: recognizedUser))
-            
+            recognitionResults[face.uuid] = recognizedUser
             dispatchGroup.leave()
         }
         
         dispatchGroup.notify(queue: .global()) {
             DispatchQueue.main.async {
-                self.delegate?.cameraService(didDetect: recognitionResults)
+                self.delegate?.cameraService(didDetect: faceObservations, recognizedUsers: recognitionResults)
             }
         }
     }
     
-    // PERBAIKAN TOTAL: Logika verifikasi yang benar dengan Penolakan Ambiguitas.
+    // PERUBAHAN 4: Ganti total fungsi verify dengan logika yang lebih kuat dan adil.
     private func verify(liveVector: FacialVector) -> User? {
-        var allMatches: [(user: User, distance: Float)] = []
+        guard !self.cachedUsers.isEmpty else { return nil }
 
-        // 1. Hitung skor terbaik untuk SETIAP pengguna yang terdaftar.
-        for cachedUser in self.cachedUsers {
-            var minDistanceForThisUser: Float = .greatestFiniteMagnitude
-            
-            for storedVector in cachedUser.facialVectors {
-                let currentDistance = Float(liveVector.distance(to: storedVector))
-                if currentDistance < minDistanceForThisUser {
-                    minDistanceForThisUser = currentDistance
-                }
-            }
-            allMatches.append((user: cachedUser.user, distance: minDistanceForThisUser))
+        let allStoredVectors: [(user: User, vector: FacialVector)] = self.cachedUsers.flatMap { cachedUser in
+            cachedUser.facialVectors.map { (user: cachedUser.user, vector: $0) }
+        }
+
+        guard !allStoredVectors.isEmpty else { return nil }
+
+        var allMatches = allStoredVectors.map { storedData in
+            let distance = Float(liveVector.distance(to: storedData.vector))
+            return (user: storedData.user, distance: distance)
         }
         
-        // 2. Urutkan semua hasil dari yang terbaik (jarak terendah) ke terburuk.
         allMatches.sort { $0.distance < $1.distance }
         
-        // 3. Ambil kandidat terbaik. Jika tidak ada, langsung gagal.
         guard let bestMatch = allMatches.first else {
             return nil
         }
         
-        // 4. Periksa apakah kandidat terbaik ini cukup bagus (di bawah ambang batas).
         guard bestMatch.distance < self.recognitionThreshold else {
             return nil
         }
         
-        // 5. Logika Anti-Ambiguitas:
-        // Jika hanya ada satu pengguna terdaftar, tidak ada ambiguitas. Langsung kembalikan.
         guard allMatches.count > 1 else {
             return bestMatch.user
         }
         
-        // Ambil kandidat terbaik kedua.
         let secondBestMatch = allMatches[1]
         
-        // Hitung selisih/kesenjangan antara skor terbaik #1 dan #2.
+        if bestMatch.user.id == secondBestMatch.user.id {
+            return bestMatch.user
+        }
+        
         let gap = secondBestMatch.distance - bestMatch.distance
         
-        // Jika kesenjangannya terlalu kecil, berarti sistem "bingung". Tolak pemindaian.
         guard gap > self.ambiguityRejectionThreshold else {
             return nil
         }
         
-        // Jika semua pemeriksaan lolos, ini adalah kecocokan yang percaya diri.
         return bestMatch.user
     }
-}¡™¡™
+    
+    private func visionOrientation(for videoRotationAngle: CGFloat) -> CGImagePropertyOrientation {
+        switch videoRotationAngle {
+        case 0: return .up
+        case 90: return .right
+        case 180: return .down
+        case 270: return .left
+        default: return .right
+        }
+    }
+}

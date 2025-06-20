@@ -3,6 +3,33 @@ import Vision
 import SwiftData
 import AVFoundation
 
+// PERUBAHAN 1: Tambahkan ekstensi ini di bagian atas file (setelah import).
+// Ekstensi ini menambahkan fungsi 'isClosed' ke landmark mata.
+extension VNFaceLandmarkRegion2D {
+    // Menghitung apakah mata tertutup berdasarkan jarak vertikal titik-titiknya.
+    // 'faceBoundingBoxHeight' digunakan untuk membuat threshold menjadi relatif dan lebih akurat.
+    func isClosed(faceBoundingBoxHeight: CGFloat, threshold: CGFloat = 0.12) -> Bool {
+        // Dapatkan semua koordinat Y dari titik-titik mata.
+        let yPoints = self.normalizedPoints.map { $0.y }
+        
+        // Cari titik terendah dan tertinggi.
+        guard let minY = yPoints.min(), let maxY = yPoints.max() else {
+            return false
+        }
+        
+        // Hitung rentang vertikal (tinggi) dari mata.
+        let verticalSpan = maxY - minY
+        
+        // Hitung rentang relatif terhadap tinggi wajah.
+        // Jika tinggi wajah 0, anggap tidak tertutup.
+        let relativeSpan = faceBoundingBoxHeight > 0 ? verticalSpan / faceBoundingBoxHeight : 1.0
+        
+        // Jika rentang relatif sangat kecil, anggap mata tertutup.
+        return relativeSpan < threshold
+    }
+}
+
+
 @MainActor
 class ScanViewModel: ObservableObject {
     @Published var statusMessage: String = "Posisikan wajah di dalam bingkai"
@@ -12,8 +39,11 @@ class ScanViewModel: ObservableObject {
     
     private var modelContext: ModelContext?
     private var todaysAttendedUserIDs = Set<String>()
-    
     private var isScanningPaused = false
+
+    // State untuk Liveness Check
+    private var lastBlinkTimestamp: Date?
+    private let blinkChallengeInterval: TimeInterval = 3.0
 
     init() {
         cameraService.delegate = self
@@ -81,22 +111,51 @@ class ScanViewModel: ObservableObject {
     }
 }
 
+// PERUBAHAN 2: Ganti implementasi delegate dengan yang baru.
 extension ScanViewModel: RealtimeCameraServiceDelegate {
-    func cameraService(didDetect faces: [DetectedFace]) {
+    func cameraService(didDetect observations: [VNFaceObservation], recognizedUsers: [UUID : User?]) {
         if isScanningPaused {
             isFaceWellPositioned = false
             return
         }
         
-        guard faces.count == 1, let face = faces.first else {
+        guard observations.count == 1, let face = observations.first else {
             isFaceWellPositioned = false
             statusMessage = "Posisikan satu wajah di dalam bingkai"
+            lastBlinkTimestamp = nil
             return
         }
         
         isFaceWellPositioned = true
         
-        if let user = face.recognizedUser {
+        // --- LIVENESS CHECK (DETEKSI KEDIPAN DARI LANDMARK) ---
+        guard let landmarks = face.landmarks else {
+            statusMessage = "Landmark wajah tidak terdeteksi"
+            return
+        }
+        
+        // Gunakan fungsi helper yang kita buat di ekstensi.
+        let leftEyeIsClosed = landmarks.leftEye?.isClosed(faceBoundingBoxHeight: face.boundingBox.height) ?? false
+        let rightEyeIsClosed = landmarks.rightEye?.isClosed(faceBoundingBoxHeight: face.boundingBox.height) ?? false
+        
+        if leftEyeIsClosed && rightEyeIsClosed {
+            lastBlinkTimestamp = Date()
+        }
+        
+        if let lastBlink = lastBlinkTimestamp {
+            if Date().timeIntervalSince(lastBlink) > blinkChallengeInterval {
+                statusMessage = "Mohon berkedip untuk verifikasi"
+                lastBlinkTimestamp = nil
+                return
+            }
+        } else {
+            statusMessage = "Mohon berkedip untuk verifikasi"
+            return
+        }
+        
+        // --- JIKA LIVENESS CHECK LOLOS, LANJUTKAN ---
+        
+        if let recognizedResult = recognizedUsers[face.uuid], let user = recognizedResult {
             recordAttendance(for: user)
         } else {
             statusMessage = "Wajah tidak dikenali"

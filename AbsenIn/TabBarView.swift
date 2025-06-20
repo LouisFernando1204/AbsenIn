@@ -16,7 +16,7 @@ struct TabBarView: View {
                     Label("Register", systemImage: "camera.fill")
                 }
 
-            AttendanceContainerView()
+            ScanView()
                 .tabItem {
                     Label("Scan", systemImage: "faceid")
                 }

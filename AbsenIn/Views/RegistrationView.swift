@@ -30,7 +30,6 @@ struct PhotoRegistrationFlowView: View {
     @State private var path = NavigationPath()
     var onComplete: () -> Void
     
-    // THE FIX: Get the dismiss action from the environment.
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -40,7 +39,6 @@ struct PhotoRegistrationFlowView: View {
                 PhotoTakingView(userName: name, onFinished: onComplete)
             }
         }
-        // THE FIX: Add a toolbar with a close button to the entire navigation flow.
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button(action: {
@@ -88,10 +86,15 @@ struct PhotoTakingView: View {
             if viewModel.isFinished { SavingView() }
             else {
                 ZStack {
-                    CameraPreview(session: viewModel.photoService.session)
-                        .ignoresSafeArea()
-                        .onAppear { viewModel.photoService.startRunning() }
-                        .onDisappear { viewModel.photoService.stopRunning() }
+                    // PERBAIKAN DI SINI: Tambahkan parameter 'videoDevice' yang hilang.
+                    CameraPreview(
+                        session: viewModel.photoService.session,
+                        videoDevice: viewModel.photoService.videoDevice
+                    )
+                    .ignoresSafeArea()
+                    .onAppear { viewModel.photoService.startRunning() }
+                    .onDisappear { viewModel.photoService.stopRunning() }
+                    
                     VStack {
                         InstructionView(instruction: viewModel.currentInstruction, status: viewModel.statusMessage)
                         Spacer()
