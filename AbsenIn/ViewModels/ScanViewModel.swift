@@ -12,10 +12,9 @@ class ScanViewModel: ObservableObject {
     
     private var modelContext: ModelContext?
     private var todaysAttendedUserIDs = Set<String>()
-    private var recentlyRecognizedUserIDs = Set<String>()
     
     private var isScanningPaused = false
-    
+
     init() {
         cameraService.delegate = self
     }
@@ -49,13 +48,13 @@ class ScanViewModel: ObservableObject {
     }
     
     private func recordAttendance(for user: User) {
-        guard let context = modelContext,
-              !todaysAttendedUserIDs.contains(user.id) else {
-            // This case is now handled by the delegate, but we keep the guard for safety.
+        guard let context = modelContext else { return }
+        
+        if todaysAttendedUserIDs.contains(user.id) {
+            statusMessage = "✅ \(user.name) sudah absen hari ini."
+            pauseScanning()
             return
         }
-        
-        recentlyRecognizedUserIDs.insert(user.id)
         
         let newRecord = AttendanceRecord(userID: user.id, userName: user.name)
         context.insert(newRecord)
@@ -63,19 +62,21 @@ class ScanViewModel: ObservableObject {
         do {
             try context.save()
             todaysAttendedUserIDs.insert(user.id)
-            
             let timeString = Date().formatted(date: .omitted, time: .standard)
             statusMessage = "✅ Absen berhasil: \(user.name) pukul \(timeString)"
-            
-            isScanningPaused = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                self.isScanningPaused = false
-                self.statusMessage = "Posisikan wajah di dalam bingkai"
-            }
+            pauseScanning()
             
         } catch {
             print("Gagal menyimpan absensi: \(error)")
             statusMessage = "❌ Gagal menyimpan data absensi."
+            pauseScanning()
+        }
+    }
+    
+    private func pauseScanning() {
+        isScanningPaused = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            self.isScanningPaused = false
         }
     }
 }
@@ -83,31 +84,22 @@ class ScanViewModel: ObservableObject {
 extension ScanViewModel: RealtimeCameraServiceDelegate {
     func cameraService(didDetect faces: [DetectedFace]) {
         if isScanningPaused {
-            self.isFaceWellPositioned = false
+            isFaceWellPositioned = false
             return
         }
         
         guard faces.count == 1, let face = faces.first else {
-            self.isFaceWellPositioned = false
-            self.statusMessage = "Posisikan satu wajah di dalam bingkai"
+            isFaceWellPositioned = false
+            statusMessage = "Posisikan satu wajah di dalam bingkai"
             return
         }
         
-        self.isFaceWellPositioned = true
+        isFaceWellPositioned = true
         
         if let user = face.recognizedUser {
-            if todaysAttendedUserIDs.contains(user.id) {
-                statusMessage = "✅ \(user.name) sudah absen hari ini."
-                isScanningPaused = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                    self.isScanningPaused = false
-                    self.statusMessage = "Posisikan wajah di dalam bingkai"
-                }
-            } else {
-                recordAttendance(for: user)
-            }
+            recordAttendance(for: user)
         } else {
-            self.statusMessage = "Wajah tidak dikenali"
+            statusMessage = "Wajah tidak dikenali"
         }
     }
 }

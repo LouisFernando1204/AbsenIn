@@ -4,14 +4,18 @@ import UIKit
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
+    // THE FIX: Use a closure to pass the layer back. This is the correct pattern.
     var onLayerCreated: ((AVCaptureVideoPreviewLayer) -> Void)? = nil
 
     func makeUIView(context: Context) -> CameraPreviewUIView {
         let view = CameraPreviewUIView(session: session)
-        view.previewLayer.videoGravity = .resizeAspect
-        if let onLayerCreated = onLayerCreated {
+        view.previewLayer.videoGravity = .resizeAspectFill
+        
+        // If the closure was provided, call it to pass the layer back.
+        if let onLayerCreated = self.onLayerCreated {
             onLayerCreated(view.previewLayer)
         }
+        
         return view
     }
 
@@ -19,7 +23,8 @@ struct CameraPreview: UIViewRepresentable {
 }
 
 class CameraPreviewUIView: UIView {
-    private(set) var previewLayer: AVCaptureVideoPreviewLayer
+    // THE FIX: This is now a standard stored property.
+    let previewLayer: AVCaptureVideoPreviewLayer
 
     init(session: AVCaptureSession) {
         self.previewLayer = AVCaptureVideoPreviewLayer(session: session)
@@ -35,6 +40,7 @@ class CameraPreviewUIView: UIView {
         )
     }
 
+    // THE FIX: This required initializer was missing.
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }

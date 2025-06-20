@@ -29,11 +29,25 @@ struct RegistrationView: View {
 struct PhotoRegistrationFlowView: View {
     @State private var path = NavigationPath()
     var onComplete: () -> Void
+    
+    // THE FIX: Get the dismiss action from the environment.
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
         NavigationStack(path: $path) {
             EnterNameView { name in path.append(name) }
             .navigationDestination(for: String.self) { name in
                 PhotoTakingView(userName: name, onFinished: onComplete)
+            }
+        }
+        // THE FIX: Add a toolbar with a close button to the entire navigation flow.
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: {
+                    dismiss()
+                }) {
+                    Image(systemName: "xmark")
+                }
             }
         }
     }
@@ -52,9 +66,7 @@ struct EnterNameView: View {
             Spacer()
             Button("Lanjut") { onNameSubmitted(userName) }.font(.headline).padding().frame(maxWidth: .infinity).background(userName.isEmpty ? Color.gray : Color.blue).foregroundColor(.white).cornerRadius(10).padding(.horizontal).disabled(userName.isEmpty)
         }
-        .padding().navigationTitle("Langkah 1: Nama").navigationBarTitleDisplayMode(.inline)
-        // THE FIX: This prevents the keyboard layout constraint errors.
-        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .padding().navigationTitle("Langkah 1: Nama").navigationBarTitleDisplayMode(.inline).ignoresSafeArea(.keyboard, edges: .bottom)
     }
 }
 
@@ -76,7 +88,6 @@ struct PhotoTakingView: View {
             if viewModel.isFinished { SavingView() }
             else {
                 ZStack {
-                    // THE FIX: Use the new, unified CameraPreview.
                     CameraPreview(session: viewModel.photoService.session)
                         .ignoresSafeArea()
                         .onAppear { viewModel.photoService.startRunning() }
@@ -132,136 +143,6 @@ struct PhotoTakingView: View {
             VStack(spacing: 20) {
                 Spacer(); ProgressView(); Text("Menyimpan data, mohon tunggu...").font(.headline); Spacer()
             }
-        }
-    }
-}
-
-// MARK: - Photo Registration ViewModel
-@MainActor
-class PhotoRegistrationViewModel: ObservableObject {
-    enum Pose: CaseIterable {
-        case center, left, right, up, down
-        var instruction: String {
-            switch self {
-            case .center: return "Lihat lurus ke depan dan tahan"
-            case .left: return "Lihat ke kiri dan tahan"
-            case .right: return "Lihat ke kanan dan tahan"
-            case .up: return "Lihat ke atas dan tahan"
-            case .down: return "Lihat ke bawah dan tahan"
-            }
-        }
-    }
-    
-    @Published var currentPoseIndex = 0
-    @Published var photosForCurrentPoseCount = 0
-    @Published var isFinished = false
-    @Published var statusMessage = ""
-    let photoService = PhotoCaptureService()
-    private let userName: String
-    private var captureTimer: Timer?
-    private var capturedPrints: [VNFeaturePrintObservation] = []
-    private var centralLandmarks: VNFaceLandmarks2D?
-    private var isWaitingForNextPose = false
-    var totalPoses: Int { Pose.allCases.count }
-    var currentInstruction: String {
-        guard currentPoseIndex < Pose.allCases.count else { return "Selesai!" }
-        return Pose.allCases[currentPoseIndex].instruction
-    }
-
-    init(userName: String) { self.userName = userName }
-
-    func startRegistration() {
-        statusMessage = "Bersiap..."
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { self.startNextPose() }
-    }
-    
-    private func startNextPose() {
-        guard currentPoseIndex < totalPoses else {
-            if !isFinished { isFinished = true }
-            return
-        }
-        photosForCurrentPoseCount = 0
-        isWaitingForNextPose = false
-        statusMessage = "Tahan posisi..."
-        
-        captureTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
-            // CONCURRENCY FIX: Ensure the call to the main actor method is done safely.
-            DispatchQueue.main.async {
-                self?.captureAndProcessPhoto()
-            }
-        }
-    }
-
-    private func captureAndProcessPhoto() {
-        guard !isWaitingForNextPose else { return }
-        photoService.capturePhoto { [weak self] image in
-            guard let self = self, let image = image else { return }
-            self.processImage(image)
-        }
-    }
-
-    private func processImage(_ image: UIImage) {
-        guard let cgImage = image.cgImage else { return }
-        let requestHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        let faceRequest = VNDetectFaceRectanglesRequest { [weak self] request, error in
-            guard let self = self, let results = request.results as? [VNFaceObservation], !results.isEmpty else { return }
-            self.extractFeatures(from: cgImage)
-        }
-        try? requestHandler.perform([faceRequest])
-    }
-
-    private func extractFeatures(from image: CGImage) {
-        let featureRequest = VNGenerateImageFeaturePrintRequest()
-        let landmarksRequest = VNDetectFaceLandmarksRequest()
-        
-        do {
-            let requestHandler = VNImageRequestHandler(cgImage: image, options: [:])
-            try requestHandler.perform([featureRequest, landmarksRequest])
-            
-            guard let featurePrint = featureRequest.results?.first as? VNFeaturePrintObservation,
-                  let landmarks = landmarksRequest.results?.first as? VNFaceObservation,
-                  let faceLandmarks = landmarks.landmarks else { return }
-
-            DispatchQueue.main.async {
-                guard !self.isWaitingForNextPose else { return }
-                self.capturedPrints.append(featurePrint)
-                self.photosForCurrentPoseCount += 1
-                
-                if Pose.allCases[self.currentPoseIndex] == .center && self.centralLandmarks == nil {
-                    self.centralLandmarks = faceLandmarks
-                }
-                
-                if self.photosForCurrentPoseCount >= 5 {
-                    self.isWaitingForNextPose = true
-                    self.captureTimer?.invalidate()
-                    self.currentPoseIndex += 1
-                    
-                    if self.currentPoseIndex >= self.totalPoses {
-                        self.statusMessage = "Semua foto berhasil diambil!"
-                        if !self.isFinished { self.isFinished = true }
-                    } else {
-                        self.statusMessage = "Bagus! Siap untuk pose berikutnya..."
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.startNextPose() }
-                    }
-                }
-            }
-        } catch { /* Ignore frames that fail processing */ }
-    }
-
-    func saveUser(context: ModelContext, completion: @escaping () -> Void) {
-        guard !capturedPrints.isEmpty, let landmarks = centralLandmarks else {
-            print("Data registrasi tidak lengkap."); completion(); return
-        }
-        do {
-            let featureprintData = try NSKeyedArchiver.archivedData(withRootObject: capturedPrints, requiringSecureCoding: true)
-            let landmarkData = try NSKeyedArchiver.archivedData(withRootObject: landmarks, requiringSecureCoding: true)
-            let newUser = User(name: userName, faceprintData: featureprintData, faceLandmarksData: landmarkData)
-            context.insert(newUser)
-            try context.save()
-            print("Pengguna baru berhasil disimpan: \(userName)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { completion() }
-        } catch {
-            print("Gagal menyimpan pengguna: \(error)"); completion()
         }
     }
 }

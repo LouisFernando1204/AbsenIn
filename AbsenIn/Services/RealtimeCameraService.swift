@@ -3,7 +3,6 @@ import Vision
 import SwiftUI
 import UIKit
 
-// This extension is correct and provides orientation helpers for the app.
 extension UIDeviceOrientation {
     var videoOrientation: AVCaptureVideoOrientation {
         switch self {
@@ -26,12 +25,9 @@ extension UIDeviceOrientation {
     }
 }
 
-// THE FIX: The DetectedFace struct is restored here, where it's created.
 struct DetectedFace: Identifiable {
     let id = UUID()
     let boundingBox: CGRect
-    let name: String?
-    let color: Color
     let recognizedUser: User?
 }
 
@@ -41,7 +37,7 @@ protocol RealtimeCameraServiceDelegate: AnyObject {
 
 struct CachedUser {
     let user: User
-    let faceprints: [VNFeaturePrintObservation]
+    let facialVectors: [FacialVector]
 }
 
 class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -50,60 +46,47 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     weak var delegate: RealtimeCameraServiceDelegate?
     
     private var isPrepared = false
-    private let strictRecognitionThreshold: Float = 0.68
-    private let uncertaintyThreshold: Float = 0.74
-    private let landmarkSimilarityThreshold: Float = 0.9
+    private let recognitionThreshold: Float = 0.08
+    
+    // PERBAIKAN UTAMA: Parameter baru untuk mencegah salah identifikasi.
+    // Ini adalah jarak minimal yang dibutuhkan antara kandidat terbaik #1 dan #2.
+    // Naikkan nilai ini untuk membuatnya lebih ketat.
+    private let ambiguityRejectionThreshold: Float = 0.05
     
     private var cachedUsers: [CachedUser] = []
     private var isProcessingFrame = false
     
     func updateRegisteredUsers(_ users: [User]) {
         cachedUsers = users.compactMap { user in
-            guard let data = user.faceprintData,
-                  let prints = try? NSKeyedUnarchiver.unarchivedObject(ofClasses: [NSArray.self, VNFeaturePrintObservation.self], from: data) as? [VNFeaturePrintObservation],
-                  user.faceLandmarksData != nil else {
+            guard let data = user.facialVectorData,
+                  let vectors = try? JSONDecoder().decode([FacialVector].self, from: data) else {
                 return nil
             }
-            return CachedUser(user: user, faceprints: prints)
+            return CachedUser(user: user, facialVectors: vectors)
         }
     }
     
     func prepare(completion: @escaping (Bool) -> Void) {
-        if isPrepared {
-            completion(true)
-            return
-        }
-        
+        if isPrepared { completion(true); return }
         DispatchQueue.global(qos: .userInitiated).async {
             let success = self.setupSession()
-            if success {
-                self.isPrepared = true
-            }
-            DispatchQueue.main.async {
-                completion(success)
-            }
+            if success { self.isPrepared = true }
+            DispatchQueue.main.async { completion(success) }
         }
     }
     
     private func setupSession() -> Bool {
         session.beginConfiguration()
         defer { session.commitConfiguration() }
-        
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else { return false }
-        
         do {
             let input = try AVCaptureDeviceInput(device: device)
             if session.canAddInput(input) { session.addInput(input) } else { return false }
-        } catch {
-            print("Gagal membuat input kamera: \(error)"); return false
-        }
-        
+        } catch { print("Gagal membuat input kamera: \(error)"); return false }
         let videoOutput = AVCaptureVideoDataOutput()
         videoOutput.alwaysDiscardsLateVideoFrames = true
         videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue", qos: .userInitiated))
-        
         if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) } else { return false }
-        
         session.sessionPreset = .hd1920x1080
         return true
     }
@@ -131,7 +114,7 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
                 return
             }
             
-            self.process(faceObservations: faceObservations, in: pixelBuffer, orientation: visionOrientation)
+            self.process(faceObservations: faceObservations)
         }
         
         do {
@@ -141,33 +124,26 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         }
     }
     
-    private func process(faceObservations: [VNFaceObservation], in pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation) {
+    private func process(faceObservations: [VNFaceObservation]) {
+        if faceObservations.isEmpty {
+            DispatchQueue.main.async { self.delegate?.cameraService(didDetect: []) }
+            return
+        }
+        
         let dispatchGroup = DispatchGroup()
         var recognitionResults: [DetectedFace] = []
         
-        for faceObservation in faceObservations {
+        for face in faceObservations {
             dispatchGroup.enter()
-            let featureprintRequest = VNGenerateImageFeaturePrintRequest()
             
-            do {
-                let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation)
-                try handler.perform([featureprintRequest])
-                
-                guard let landmarks = faceObservation.landmarks,
-                      let featurePrint = featureprintRequest.results?.first as? VNFeaturePrintObservation else {
-                    dispatchGroup.leave()
-                    continue
-                }
-                
-                if let verifiedUser = self.verify(liveFeaturePrint: featurePrint, liveLandmarks: landmarks) {
-                    recognitionResults.append(DetectedFace(boundingBox: faceObservation.boundingBox, name: verifiedUser.name, color: .green, recognizedUser: verifiedUser))
-                } else {
-                    recognitionResults.append(DetectedFace(boundingBox: faceObservation.boundingBox, name: "Tidak Dikenali", color: .red, recognizedUser: nil))
-                }
-                
-            } catch {
-                print("Gagal melakukan analisis detail wajah: \(error)")
+            guard let landmarks = face.landmarks, let liveVector = landmarks.toFacialVector() else {
+                dispatchGroup.leave()
+                continue
             }
+            
+            let recognizedUser = self.verify(liveVector: liveVector)
+            recognitionResults.append(DetectedFace(boundingBox: face.boundingBox, recognizedUser: recognizedUser))
+            
             dispatchGroup.leave()
         }
         
@@ -178,45 +154,54 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         }
     }
     
-    private func verify(liveFeaturePrint: VNFeaturePrintObservation, liveLandmarks: VNFaceLandmarks2D) -> User? {
-        var bestMatch: (user: User, distance: Float)? = nil
+    // PERBAIKAN TOTAL: Logika verifikasi yang benar dengan Penolakan Ambiguitas.
+    private func verify(liveVector: FacialVector) -> User? {
+        var allMatches: [(user: User, distance: Float)] = []
+
+        // 1. Hitung skor terbaik untuk SETIAP pengguna yang terdaftar.
         for cachedUser in self.cachedUsers {
-            var lowestDistanceForThisUser: Float = .greatestFiniteMagnitude
-            for storedPrint in cachedUser.faceprints {
-                var distance: Float = .greatestFiniteMagnitude
-                try? liveFeaturePrint.computeDistance(&distance, to: storedPrint)
-                lowestDistanceForThisUser = min(lowestDistanceForThisUser, distance)
+            var minDistanceForThisUser: Float = .greatestFiniteMagnitude
+            
+            for storedVector in cachedUser.facialVectors {
+                let currentDistance = Float(liveVector.distance(to: storedVector))
+                if currentDistance < minDistanceForThisUser {
+                    minDistanceForThisUser = currentDistance
+                }
             }
-            if bestMatch == nil || lowestDistanceForThisUser < bestMatch!.distance {
-                bestMatch = (cachedUser.user, lowestDistanceForThisUser)
-            }
+            allMatches.append((user: cachedUser.user, distance: minDistanceForThisUser))
         }
         
-        if let best = bestMatch {
-            if best.distance < self.strictRecognitionThreshold { return best.user }
-            if best.distance < self.uncertaintyThreshold,
-               let storedLandmarksData = best.user.faceLandmarksData,
-               let storedLandmarks = try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFaceLandmarks2D.self, from: storedLandmarksData) {
-                let similarity = self.calculateLandmarkSimilarity(landmarks1: storedLandmarks, landmarks2: liveLandmarks)
-                if similarity > self.landmarkSimilarityThreshold { return best.user }
-            }
+        // 2. Urutkan semua hasil dari yang terbaik (jarak terendah) ke terburuk.
+        allMatches.sort { $0.distance < $1.distance }
+        
+        // 3. Ambil kandidat terbaik. Jika tidak ada, langsung gagal.
+        guard let bestMatch = allMatches.first else {
+            return nil
         }
-        return nil
+        
+        // 4. Periksa apakah kandidat terbaik ini cukup bagus (di bawah ambang batas).
+        guard bestMatch.distance < self.recognitionThreshold else {
+            return nil
+        }
+        
+        // 5. Logika Anti-Ambiguitas:
+        // Jika hanya ada satu pengguna terdaftar, tidak ada ambiguitas. Langsung kembalikan.
+        guard allMatches.count > 1 else {
+            return bestMatch.user
+        }
+        
+        // Ambil kandidat terbaik kedua.
+        let secondBestMatch = allMatches[1]
+        
+        // Hitung selisih/kesenjangan antara skor terbaik #1 dan #2.
+        let gap = secondBestMatch.distance - bestMatch.distance
+        
+        // Jika kesenjangannya terlalu kecil, berarti sistem "bingung". Tolak pemindaian.
+        guard gap > self.ambiguityRejectionThreshold else {
+            return nil
+        }
+        
+        // Jika semua pemeriksaan lolos, ini adalah kecocokan yang percaya diri.
+        return bestMatch.user
     }
-    
-    private func calculateLandmarkSimilarity(landmarks1: VNFaceLandmarks2D, landmarks2: VNFaceLandmarks2D) -> Float {
-        guard let p1_leftPupil = landmarks1.leftPupil?.normalizedPoints.first, let p1_rightPupil = landmarks1.rightPupil?.normalizedPoints.first, let p1_noseTip = landmarks1.nose?.normalizedPoints.first, let p2_leftPupil = landmarks2.leftPupil?.normalizedPoints.first, let p2_rightPupil = landmarks2.rightPupil?.normalizedPoints.first, let p2_noseTip = landmarks2.nose?.normalizedPoints.first else { return 0.0 }
-        let p1_pupilDistance = hypot(p1_rightPupil.x - p1_leftPupil.x, p1_rightPupil.y - p1_leftPupil.y)
-        let p2_pupilDistance = hypot(p2_rightPupil.x - p2_leftPupil.x, p2_rightPupil.y - p2_leftPupil.y)
-        guard p1_pupilDistance > 0, p2_pupilDistance > 0 else { return 0.0 }
-        let p1_leftPupilToNose = hypot(p1_noseTip.x - p1_leftPupil.x, p1_noseTip.y - p1_leftPupil.y) / p1_pupilDistance
-        let p2_leftPupilToNose = hypot(p2_noseTip.x - p2_leftPupil.x, p2_noseTip.y - p2_leftPupil.y) / p2_pupilDistance
-        let p1_rightPupilToNose = hypot(p1_noseTip.x - p1_rightPupil.x, p1_noseTip.y - p1_rightPupil.y) / p1_pupilDistance
-        let p2_rightPupilToNose = hypot(p2_noseTip.x - p2_rightPupil.x, p2_noseTip.y - p2_rightPupil.y) / p2_pupilDistance
-        let error1 = abs(p1_leftPupilToNose - p2_leftPupilToNose)
-        let error2 = abs(p1_rightPupilToNose - p2_rightPupilToNose)
-        let averageError = (error1 + error2) / 2.0
-        let similarity = max(0.0, 1.0 - (averageError / 0.1))
-        return Float(similarity)
-    }
-}
+}¡™¡™

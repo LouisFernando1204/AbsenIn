@@ -10,11 +10,10 @@ struct ScanView: View {
     
     var body: some View {
         ZStack {
-            // The CameraPreview no longer needs to pass back the layer.
             CameraPreview(session: viewModel.cameraService.session)
                 .ignoresSafeArea()
             
-            // THE FIX: A simple, clean overlay instead of bounding boxes.
+            // PERBAIKAN UI: Menghapus bounding box dan menggunakan overlay lingkaran.
             faceOverlay
             
             VStack {
@@ -24,7 +23,7 @@ struct ScanView: View {
                     .padding()
                     .background(Color.black.opacity(0.6))
                     .cornerRadius(10)
-                    .padding(.top, 20)
+                    .padding(.top, 40)
                     .animation(.easeInOut, value: viewModel.statusMessage)
                 
                 Spacer()
@@ -38,11 +37,11 @@ struct ScanView: View {
         }
     }
     
-    // A helper view for the new face guide overlay.
+    // Helper view untuk overlay pemandu wajah yang bersih.
     private var faceOverlay: some View {
-        Capsule()
+        Circle()
             .stroke(viewModel.isFaceWellPositioned ? Color.green : Color.white, lineWidth: 5)
-            .frame(width: 300, height: 450)
+            .frame(width: 300, height: 300)
             .opacity(0.8)
             .animation(.easeInOut(duration: 0.3), value: viewModel.isFaceWellPositioned)
     }
