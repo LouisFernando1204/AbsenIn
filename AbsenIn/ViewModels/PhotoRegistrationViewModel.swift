@@ -17,6 +17,10 @@ class PhotoRegistrationViewModel: ObservableObject {
         }
     }
     
+    // PERBAIKAN 1: Tentukan jumlah foto per pose di satu tempat.
+    // Mengubah ini menjadi 10 akan menghasilkan total 50 foto (10 foto x 5 pose).
+    private let photosPerPose = 10
+    
     @Published var currentPoseIndex = 0
     @Published var photosForCurrentPoseCount = 0
     @Published var isFinished = false
@@ -50,7 +54,8 @@ class PhotoRegistrationViewModel: ObservableObject {
         isWaitingForNextPose = false
         statusMessage = "Tahan posisi..."
         
-        captureTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
+        // Mengambil foto lebih cepat untuk mempercepat proses
+        captureTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             DispatchQueue.main.async {
                 self?.captureAndProcessPhoto()
             }
@@ -65,23 +70,33 @@ class PhotoRegistrationViewModel: ObservableObject {
         }
     }
 
+    // Di dalam PhotoRegistrationViewModel.swift
+
     private func processImage(_ image: UIImage) {
         guard let cgImage = image.cgImage else { return }
         let requestHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         
+        // PERBAIKAN 7: Gunakan request yang sama seperti di RealtimeCameraService.
         let landmarksRequest = VNDetectFaceLandmarksRequest { [weak self] request, error in
             guard let self = self else { return }
             
-            guard let results = request.results as? [VNFaceObservation], let firstFace = results.first else {
+            guard let results = request.results as? [VNFaceObservation],
+                  let firstFace = results.first,
+                  let landmarks = firstFace.landmarks else {
                 DispatchQueue.main.async {
-                    self.statusMessage = "Wajah tidak terdeteksi. Posisikan wajah Anda."
+                    self.statusMessage = "Wajah tidak terdeteksi."
                 }
                 return
             }
             
-            if let facialVector = firstFace.landmarks?.toFacialVector() {
+            // Gunakan ekstensi baru untuk mendapatkan vektor dari semua landmark.
+            if let facialVector = landmarks.toFacialVector() {
                 DispatchQueue.main.async {
                     self.handleSuccessfulCapture(with: facialVector)
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.statusMessage = "Gagal mengekstrak fitur wajah."
                 }
             }
         }
@@ -94,9 +109,11 @@ class PhotoRegistrationViewModel: ObservableObject {
         
         self.capturedVectors.append(vector)
         self.photosForCurrentPoseCount += 1
-        self.statusMessage = "Foto \(self.photosForCurrentPoseCount) dari 5 berhasil!"
         
-        if self.photosForCurrentPoseCount >= 5 {
+        // PERBAIKAN 2: Update status message agar sesuai dengan jumlah baru.
+        self.statusMessage = "Foto \(self.photosForCurrentPoseCount) dari \(self.photosPerPose) berhasil!"
+        
+        if self.photosForCurrentPoseCount >= self.photosPerPose {
             self.isWaitingForNextPose = true
             self.captureTimer?.invalidate()
             self.currentPoseIndex += 1
@@ -120,7 +137,7 @@ class PhotoRegistrationViewModel: ObservableObject {
             let newUser = User(name: userName, facialVectorData: vectorData)
             context.insert(newUser)
             try context.save()
-            print("Pengguna baru berhasil disimpan: \(userName)")
+            print("Pengguna baru berhasil disimpan: \(userName) dengan \(capturedVectors.count) vektor.")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { completion() }
         } catch {
             print("Gagal menyimpan pengguna: \(error)"); completion()

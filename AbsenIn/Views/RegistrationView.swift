@@ -58,7 +58,7 @@ struct EnterNameView: View {
     var body: some View {
         VStack(spacing: 20) {
             Spacer(); Image(systemName: "person.text.rectangle").font(.system(size: 60)).foregroundColor(.accentColor)
-            Text("Siapa Nama Anda?").font(.largeTitle).fontWeight(.bold)
+            Text("Registrasi Karyawan?").font(.largeTitle).fontWeight(.bold)
             Text("Masukkan nama lengkap Anda untuk memulai proses pendaftaran wajah.").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal)
             TextField("Nama Lengkap", text: $userName).textFieldStyle(RoundedBorderTextFieldStyle()).padding(.horizontal, 40).submitLabel(.done)
             Spacer()
@@ -86,19 +86,15 @@ struct PhotoTakingView: View {
             if viewModel.isFinished { SavingView() }
             else {
                 ZStack {
-                    // PERBAIKAN DI SINI: Tambahkan parameter 'videoDevice' yang hilang.
-                    CameraPreview(
-                        session: viewModel.photoService.session,
-                        videoDevice: viewModel.photoService.videoDevice
-                    )
-                    .ignoresSafeArea()
-                    .onAppear { viewModel.photoService.startRunning() }
-                    .onDisappear { viewModel.photoService.stopRunning() }
-                    
+                    CameraPreview(session: viewModel.photoService.session, videoDevice: viewModel.photoService.videoDevice)
+                        .ignoresSafeArea()
+                        .onAppear { viewModel.photoService.startRunning() }
+                        .onDisappear { viewModel.photoService.stopRunning() }
                     VStack {
                         InstructionView(instruction: viewModel.currentInstruction, status: viewModel.statusMessage)
                         Spacer()
-                        ProgressIndicatorView(totalPoses: viewModel.totalPoses, currentPoseIndex: viewModel.currentPoseIndex, photosForCurrentPose: viewModel.photosForCurrentPoseCount)
+                        // PERBAIKAN 3: Panggil ProgressIndicatorView dengan parameter yang sudah diperbarui.
+                        ProgressIndicatorView(totalPoses: viewModel.totalPoses, currentPoseIndex: viewModel.currentPoseIndex)
                     }.padding(.vertical, 40)
                 }
             }
@@ -122,22 +118,35 @@ struct PhotoTakingView: View {
         }
     }
     
+    // PERBAIKAN 1: Ubah total struct ProgressIndicatorView.
     struct ProgressIndicatorView: View {
         let totalPoses: Int
         let currentPoseIndex: Int
-        let photosForCurrentPose: Int
+        
         var body: some View {
             VStack(spacing: 15) {
                 Text("Pose \(min(currentPoseIndex + 1, totalPoses)) dari \(totalPoses)")
                     .font(.headline).foregroundColor(.white)
+                
                 HStack(spacing: 10) {
-                    ForEach(0..<5) { index in
-                        Circle().fill(index < photosForCurrentPose ? Color.green : Color.white.opacity(0.5)).frame(width: 15, height: 15)
+                    ForEach(0..<totalPoses, id: \.self) { index in
+                        
+                        Circle()
+                            .fill(colorFor(index: index))
+                            .frame(width: 15, height: 15)
                     }
                 }
-                .animation(.default, value: photosForCurrentPose)
+                .animation(.default, value: currentPoseIndex)
             }
             .padding().background(Color.black.opacity(0.6)).cornerRadius(10)
+        }
+        
+        private func colorFor(index: Int) -> Color {
+            if index <= currentPoseIndex {
+                return .green
+            } else {
+                return Color.gray
+            }
         }
     }
     

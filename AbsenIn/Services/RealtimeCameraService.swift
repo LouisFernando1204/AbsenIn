@@ -3,16 +3,6 @@ import Vision
 import SwiftUI
 import UIKit
 
-// PERUBAHAN 1: Struct DetectedFace tidak lagi digunakan oleh delegate ini,
-// namun bisa dipertahankan jika digunakan di tempat lain.
-struct DetectedFace: Identifiable {
-    let id = UUID()
-    let boundingBox: CGRect
-    let recognizedUser: User?
-}
-
-// PERUBAHAN 2: Ubah delegate untuk mengirim data yang lebih kaya.
-// Ini memungkinkan ViewModel untuk melakukan liveness check (deteksi kedipan).
 protocol RealtimeCameraServiceDelegate: AnyObject {
     @MainActor func cameraService(didDetect observations: [VNFaceObservation], recognizedUsers: [UUID: User?])
 }
@@ -30,12 +20,14 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     private(set) var videoDevice: AVCaptureDevice?
     private var isPrepared = false
     
-    private let recognitionThreshold: Float = 0.09
-    private let ambiguityRejectionThreshold: Float = 0.06
+    // We can be a bit more lenient with this threshold because the voting
+    // system will filter out random matches.
+    private let recognitionThreshold: Float = 0.40
     
     private var cachedUsers: [CachedUser] = []
     private var isProcessingFrame = false
     
+    // This function is crucial and is included.
     func updateRegisteredUsers(_ users: [User]) {
         cachedUsers = users.compactMap { user in
             guard let data = user.facialVectorData,
@@ -109,7 +101,6 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         }
     }
     
-    // PERUBAHAN 3: Ubah fungsi process untuk memanggil delegate yang baru.
     private func process(faceObservations: [VNFaceObservation]) {
         if faceObservations.isEmpty {
             DispatchQueue.main.async {
@@ -141,7 +132,7 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         }
     }
     
-    // PERUBAHAN 4: Ganti total fungsi verify dengan logika yang lebih kuat dan adil.
+    // THE KEY FIX: A robust K-Nearest Neighbors (KNN) voting system.
     private func verify(liveVector: FacialVector) -> User? {
         guard !self.cachedUsers.isEmpty else { return nil }
 
@@ -151,38 +142,48 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
 
         guard !allStoredVectors.isEmpty else { return nil }
 
+        // 1. Calculate the distance from the live face to ALL stored vectors.
         var allMatches = allStoredVectors.map { storedData in
-            let distance = Float(liveVector.distance(to: storedData.vector))
+            let distance = liveVector.euclideanDistance(to: storedData.vector)
             return (user: storedData.user, distance: distance)
         }
         
+        // 2. Sort by the closest distance (smallest is best).
         allMatches.sort { $0.distance < $1.distance }
         
-        guard let bestMatch = allMatches.first else {
+        // 3. Take the top 'k' candidates. Let's use 11 for a clear majority.
+        let k = 11
+        let nearestNeighbors = allMatches.prefix(k)
+        
+        // 4. Filter out candidates that are too far away (likely a random person).
+        // This is a crucial step to reject unknown faces.
+        let validNeighbors = nearestNeighbors.filter { $0.distance < self.recognitionThreshold }
+        
+        // If no neighbors are close enough, it's an unknown person.
+        guard !validNeighbors.isEmpty else { return nil }
+        
+        // 5. Perform the vote: Count how many times each user ID appears in the valid neighbors.
+        // The 'Dictionary(grouping:by:)' is a very efficient way to do this.
+        let votes = Dictionary(grouping: validNeighbors, by: { $0.user.id })
+            .mapValues { $0.count }
+        
+        // 6. Find the user with the most votes.
+        guard let winner = votes.max(by: { $0.value < $1.value }) else {
             return nil
         }
         
-        guard bestMatch.distance < self.recognitionThreshold else {
+        // 7. Confidence Check: Ensure the winner has a clear majority.
+        // The winner must have more than half of the votes to be considered valid.
+        let majorityThreshold = validNeighbors.count / 2
+        guard winner.value > majorityThreshold else {
+            // This handles cases where the votes are split, e.g., 4 votes for Sam, 3 for Lusi.
+            // It's too ambiguous, so we reject.
+            // print("REJECTED: No clear majority. Winner only has \(winner.value) of \(validNeighbors.count) valid votes.")
             return nil
         }
         
-        guard allMatches.count > 1 else {
-            return bestMatch.user
-        }
-        
-        let secondBestMatch = allMatches[1]
-        
-        if bestMatch.user.id == secondBestMatch.user.id {
-            return bestMatch.user
-        }
-        
-        let gap = secondBestMatch.distance - bestMatch.distance
-        
-        guard gap > self.ambiguityRejectionThreshold else {
-            return nil
-        }
-        
-        return bestMatch.user
+        // 8. Find the full User object for the winning ID.
+        return self.cachedUsers.first(where: { $0.user.id == winner.key })?.user
     }
     
     private func visionOrientation(for videoRotationAngle: CGFloat) -> CGImagePropertyOrientation {

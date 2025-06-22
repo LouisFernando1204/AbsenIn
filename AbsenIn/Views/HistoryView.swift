@@ -1,62 +1,132 @@
-//
-//  HistoryView.swift
-//  AbsenIn
-//
-//  Created by Louis Fernando on 18/06/25.
-//
-
 import SwiftUI
+import Charts // Jangan lupa import Charts
 
 struct HistoryView: View {
     @StateObject private var viewModel = HistoryViewModel()
     @Environment(\.modelContext) private var modelContext
     
     var body: some View {
-        VStack {
+        // Gunakan ScrollView agar bisa di-scroll di layar kecil
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                
+                // --- BAGIAN GRAFIK (SPOTLIGHT) ---
+                attendanceChartView
+                    .padding(.horizontal)
+                
+                Divider()
+                
+                // --- BAGIAN DAFTAR HARIAN ---
+                dailyAttendanceSection
+                    .padding(.horizontal)
+                
+            }
+            .padding(.vertical)
+        }
+        .background(Color(.systemGroupedBackground)) // Latar belakang yang sesuai HIG
+        .navigationTitle("Riwayat Presensi")
+        .onAppear {
+            viewModel.setup(modelContext: modelContext)
+        }
+        .onChange(of: viewModel.selectedDate) {
+            viewModel.fetchRecordsForSelectedDate()
+        }
+    }
+    
+    // View untuk Grafik Absensi Mingguan
+    private var attendanceChartView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Aktivitas Mingguan")
+                .font(.title2.bold())
+                .foregroundStyle(.primary)
+            
+            Text("Jumlah karyawan yang hadir dalam 7 hari terakhir.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            
+            // Chart View
+            Chart(viewModel.weeklyStats) { stat in
+                BarMark(
+                    x: .value("Hari", stat.dayInitial),
+                    y: .value("Jumlah Hadir", stat.count)
+                )
+                .foregroundStyle(by: .value("Hari", stat.dayInitial))
+                .cornerRadius(8)
+            }
+            .chartLegend(.hidden) // Sembunyikan legenda agar lebih bersih
+            .chartYAxis {
+                // Pastikan sumbu Y hanya menampilkan angka bulat
+                AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                    AxisGridLine()
+                    AxisTick()
+                    if let intValue = value.as(Int.self) {
+                        AxisValueLabel("\(intValue)")
+                    }
+                }
+            }
+            .frame(height: 200)
+            .padding()
+            .background(Color(.secondarySystemGroupedBackground))
+            .cornerRadius(12)
+        }
+    }
+    
+    // View untuk Daftar Absensi Harian dan Pemilih Tanggal
+    private var dailyAttendanceSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Detail Harian")
+                .font(.title2.bold())
+            
+            // DatePicker sekarang lebih ringkas
             DatePicker(
                 "Pilih Tanggal",
                 selection: $viewModel.selectedDate,
                 displayedComponents: .date
             )
-            .datePickerStyle(.graphical)
-            .padding(.horizontal)
+            .datePickerStyle(.compact)
             
+            // Daftar atau pesan "Tidak Ada Data"
             if viewModel.recordsForSelectedDate.isEmpty {
                 ContentUnavailableView(
                     "Tidak Ada Data",
-                    systemImage: "doc.text.magnifyingglass",
-                    description: Text("Tidak ada riwayat absensi pada tanggal \(viewModel.selectedDate, formatter: itemFormatter).")
+                    systemImage: "calendar.badge.exclamationmark",
+                    description: Text("Tidak ada riwayat absensi pada tanggal yang dipilih.")
                 )
+                .padding(.vertical, 40)
+                .background(Color(.secondarySystemGroupedBackground))
+                .cornerRadius(12)
             } else {
-                List {
+                // Gunakan VStack untuk tampilan yang lebih custom daripada List
+                VStack(spacing: 0) {
                     ForEach(viewModel.recordsForSelectedDate, id: \.timestamp) { record in
-                        HStack {
-                            Text(record.userName)
-                                .fontWeight(.bold)
-                            Spacer()
-                            Text(record.timestamp, style: .time)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
+                        VStack {
+                            HStack {
+                                Text(record.userName)
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Text(record.timestamp, style: .time)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding()
+                            
+                            // Tambahkan Divider kecuali untuk item terakhir
+                            if record.timestamp != viewModel.recordsForSelectedDate.last?.timestamp {
+                                Divider().padding(.leading)
+                            }
                         }
                     }
                 }
-                .listStyle(.plain)
+                .background(Color(.secondarySystemGroupedBackground))
+                .cornerRadius(12)
             }
         }
-        .onAppear {
-            viewModel.setup(modelContext: modelContext)
-            viewModel.fetchRecords()
-        }
-        .onChange(of: viewModel.selectedDate) { _, _ in
-            viewModel.fetchRecords()
-        }
-        .navigationTitle("Riwayat Presensi")
     }
 }
 
-private let itemFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateStyle = .long
-    formatter.timeStyle = .none
-    return formatter
-}()
+// Preview untuk memudahkan desain
+#Preview {
+    NavigationStack {
+        HistoryView()
+    }
+}
