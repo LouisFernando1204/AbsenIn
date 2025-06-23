@@ -12,9 +12,8 @@ import SwiftData
 struct AbsenInApp: App {
     var body: some Scene {
         WindowGroup {
-            MainTabView() // Langsung tampilkan MainTabView sebagai view utama
+            MainTabView() // No modifier needed here anymore
         }
-        // Daftarkan semua model yang akan digunakan aplikasi di sini
         .modelContainer(for: [User.self, AttendanceRecord.self])
     }
 }
