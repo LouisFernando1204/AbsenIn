@@ -1,7 +1,9 @@
+// PhotoCaptureService.swift (GANTI SELURUH FILE)
+
 import AVFoundation
 import UIKit
 
-class PhotoCaptureService: NSObject { // Tambahkan NSObject agar bisa menjadi delegate
+class PhotoCaptureService: NSObject {
     let session = AVCaptureSession()
     
     private(set) var videoDevice: AVCaptureDevice?
@@ -9,7 +11,7 @@ class PhotoCaptureService: NSObject { // Tambahkan NSObject agar bisa menjadi de
     private var photoOutput = AVCapturePhotoOutput()
     private var photoCaptureCompletion: ((UIImage?) -> Void)?
 
-    override init() { // Tambahkan override karena kita mewarisi dari NSObject
+    override init() {
         super.init()
         setupSession()
     }
@@ -23,8 +25,6 @@ class PhotoCaptureService: NSObject { // Tambahkan NSObject agar bisa menjadi de
             return
         }
         
-        // 2. SIMPAN REFERENSI KE PERANGKAT
-        // Ini penting agar View bisa mengaksesnya.
         self.videoDevice = device
 
         do {
@@ -41,7 +41,9 @@ class PhotoCaptureService: NSObject { // Tambahkan NSObject agar bisa menjadi de
             session.addOutput(photoOutput)
         }
         
-        session.sessionPreset = .photo
+        // PERBAIKAN PENTING: Samakan preset sesi dengan RealtimeCameraService.
+        // Ini sangat krusial untuk konsistensi antara data registrasi dan data scan.
+        session.sessionPreset = .hd1920x1080
     }
 
     func startRunning() {
@@ -60,14 +62,25 @@ class PhotoCaptureService: NSObject { // Tambahkan NSObject agar bisa menjadi de
 
     func capturePhoto(completion: @escaping (UIImage?) -> Void) {
         self.photoCaptureCompletion = completion
+        
+        // Cukup buat objek settings standar. iOS akan memilih format terbaik
+        // yang kompatibel dengan sesi yang sedang berjalan.
         let settings = AVCapturePhotoSettings()
+        
+        // Pastikan orientasi foto sesuai dengan preview
+        if let connection = photoOutput.connection(with: .video) {
+            connection.videoRotationAngle = 90
+        }
+        
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
 }
 
 extension PhotoCaptureService: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        guard error == nil, let imageData = photo.fileDataRepresentation(), let image = UIImage(data: imageData) else {
+        guard error == nil,
+              let imageData = photo.fileDataRepresentation(),
+              let image = UIImage(data: imageData) else {
             print("Gagal memproses foto: \(error?.localizedDescription ?? "error tidak diketahui")")
             photoCaptureCompletion?(nil)
             return

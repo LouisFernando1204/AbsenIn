@@ -1,3 +1,6 @@
+// User.swift
+// TIDAK ADA PERUBAHAN. Strukturnya sudah tepat.
+
 import Foundation
 import SwiftData
 import Vision
@@ -8,6 +11,7 @@ final class User {
     var name: String
     var registrationDate: Date
     
+    // Data ini sekarang akan menyimpan [VNFeaturePrintObservation] yang di-serialize
     @Attribute(.externalStorage)
     var facialVectorData: Data?
     

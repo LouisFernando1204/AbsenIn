@@ -1,20 +1,20 @@
+// ScanViewModel.swift (GANTI SELURUH FILE)
+
 import SwiftUI
 import Vision
 import SwiftData
-import AVFoundation
-
-// Ekstensi untuk deteksi kedipan sudah tidak diperlukan lagi dan bisa dihapus.
 
 @MainActor
 class ScanViewModel: ObservableObject {
     @Published var statusMessage: String = "Posisikan wajah di dalam bingkai"
-    @Published var isFaceWellPositioned: Bool = false
+    @Published var isFaceDetected: Bool = false // Hanya untuk feedback UI
     
     let cameraService = RealtimeCameraService()
-    
     private var modelContext: ModelContext?
     private var todaysAttendedUserIDs = Set<String>()
-    private var isScanningPaused = false
+    
+    // Flag untuk memastikan kita tidak memproses absensi berkali-kali dalam satu sesi pengenalan
+    private var isProcessingAttendance = false
 
     init() {
         cameraService.delegate = self
@@ -22,19 +22,23 @@ class ScanViewModel: ObservableObject {
     
     func activate(modelContext: ModelContext, registeredUsers: [User]) {
         self.modelContext = modelContext
+        self.isProcessingAttendance = false // Reset saat diaktifkan
+        
         self.cameraService.updateRegisteredUsers(registeredUsers)
         self.fetchTodaysAttendance()
         
         cameraService.prepare { [weak self] success in
+            guard let self = self else { return }
             guard success else {
-                self?.statusMessage = "Kamera tidak dapat diakses."
+                self.statusMessage = "Kamera tidak dapat diakses."
                 return
             }
-            self?.cameraService.startSession()
+            self.cameraService.startSession()
         }
     }
     
     private func fetchTodaysAttendance() {
+        // ... (fungsi ini sudah benar, tidak perlu diubah)
         guard let context = modelContext else { return }
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: Date())
@@ -49,11 +53,12 @@ class ScanViewModel: ObservableObject {
     }
     
     private func recordAttendance(for user: User) {
-        guard let context = modelContext else { return }
+        guard !isProcessingAttendance, let context = modelContext else { return }
+        isProcessingAttendance = true // Kunci proses absensi
         
         if todaysAttendedUserIDs.contains(user.id) {
             statusMessage = "✅ \(user.name) sudah absen hari ini."
-            pauseScanning()
+            resetAfterDelay()
             return
         }
         
@@ -65,43 +70,51 @@ class ScanViewModel: ObservableObject {
             todaysAttendedUserIDs.insert(user.id)
             let timeString = Date().formatted(date: .omitted, time: .standard)
             statusMessage = "✅ Absen berhasil: \(user.name) pukul \(timeString)"
-            pauseScanning()
-            
+            resetAfterDelay()
         } catch {
             print("Gagal menyimpan absensi: \(error)")
             statusMessage = "❌ Gagal menyimpan data absensi."
+            isProcessingAttendance = false // Buka kunci jika gagal
         }
     }
     
-    private func pauseScanning() {
-        isScanningPaused = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-            self.isScanningPaused = false
+    // Reset status setelah beberapa detik
+    private func resetAfterDelay(seconds: TimeInterval = 3.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            self.isProcessingAttendance = false
+            self.statusMessage = "Posisikan wajah di dalam bingkai"
         }
     }
 }
 
-// Implementasi delegate yang sederhana dan langsung ke tujuan.
+// Implementasi delegate yang lebih ringkas
 extension ScanViewModel: RealtimeCameraServiceDelegate {
     func cameraService(didDetect observations: [VNFaceObservation], recognizedUsers: [UUID : User?]) {
-        if isScanningPaused {
-            isFaceWellPositioned = false
+        // Jangan ubah status jika sedang menampilkan pesan sukses/gagal
+        if isProcessingAttendance {
+            return
+        }
+
+        guard let face = observations.first else {
+            isFaceDetected = false
+            statusMessage = observations.isEmpty ? "Posisikan wajah di dalam bingkai" : "Hanya satu wajah yang diizinkan"
             return
         }
         
-        guard observations.count == 1, let face = observations.first else {
-            isFaceWellPositioned = false
-            statusMessage = "Posisikan satu wajah di dalam bingkai"
-            return
-        }
+        isFaceDetected = true
         
-        isFaceWellPositioned = true
-        
-        // Langsung periksa hasil pengenalan yang sudah dihitung oleh service.
-        if let recognizedResult = recognizedUsers[face.uuid], let user = recognizedResult {
-            recordAttendance(for: user)
+        // Periksa hasil pengenalan dari service
+        if let recognizedResult = recognizedUsers[face.uuid] {
+            if let user = recognizedResult {
+                // Pengguna dikenali, catat absensi
+                recordAttendance(for: user)
+            } else {
+                // Wajah terdeteksi tapi tidak cocok dengan siapa pun
+                statusMessage = "Wajah tidak dikenali"
+            }
         } else {
-            statusMessage = "Wajah tidak dikenali"
+            // Wajah terdeteksi, sedang dalam proses verifikasi...
+             statusMessage = "Memverifikasi..."
         }
     }
 }

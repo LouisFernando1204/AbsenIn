@@ -30,7 +30,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		02E6F1462E05ABC3004FC992 /* Exceptions for "AbsenIn" folder in "AbsenIn" target */ = {
+		64D87AE42E08F1B700AC9C1B /* Exceptions for "AbsenIn" folder in "AbsenIn" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -43,7 +43,7 @@
 		649B183E2E010692006223E6 /* AbsenIn */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				02E6F1462E05ABC3004FC992 /* Exceptions for "AbsenIn" folder in "AbsenIn" target */,
+				64D87AE42E08F1B700AC9C1B /* Exceptions for "AbsenIn" folder in "AbsenIn" target */,
 			);
 			path = AbsenIn;
 			sourceTree = "<group>";
@@ -410,9 +410,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 57MK4233LQ;
+				DEVELOPMENT_TEAM = QMURXCTWQ7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = AbsenIn;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Aplikasi ini memerlukan akses kamera untuk mendaftarkan wajah Anda dan melakukan presensi harian.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -440,9 +441,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 57MK4233LQ;
+				DEVELOPMENT_TEAM = QMURXCTWQ7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = AbsenIn;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Aplikasi ini memerlukan akses kamera untuk mendaftarkan wajah Anda dan melakukan presensi harian.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

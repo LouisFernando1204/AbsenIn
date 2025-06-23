@@ -1,7 +1,8 @@
+// RealtimeCameraService.swift (FINAL - BERSIH - TANPA API ANEH)
+
 import AVFoundation
 import Vision
 import SwiftUI
-import UIKit
 
 protocol RealtimeCameraServiceDelegate: AnyObject {
     @MainActor func cameraService(didDetect observations: [VNFaceObservation], recognizedUsers: [UUID: User?])
@@ -9,7 +10,7 @@ protocol RealtimeCameraServiceDelegate: AnyObject {
 
 struct CachedUser {
     let user: User
-    let facialVectors: [FacialVector]
+    let featurePrints: [VNFeaturePrintObservation]
 }
 
 class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -18,23 +19,21 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     weak var delegate: RealtimeCameraServiceDelegate?
     
     private(set) var videoDevice: AVCaptureDevice?
+    private var videoOutput = AVCaptureVideoDataOutput()
     private var isPrepared = false
     
-    // We can be a bit more lenient with this threshold because the voting
-    // system will filter out random matches.
-    private let recognitionThreshold: Float = 0.40
-    
     private var cachedUsers: [CachedUser] = []
-    private var isProcessingFrame = false
     
-    // This function is crucial and is included.
+    private var isProcessingFrame = false
+    private var isRecognitionLocked = false
+
     func updateRegisteredUsers(_ users: [User]) {
         cachedUsers = users.compactMap { user in
             guard let data = user.facialVectorData,
-                  let vectors = try? JSONDecoder().decode([FacialVector].self, from: data) else {
+                  let prints = try? NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(data) as? [VNFeaturePrintObservation] else {
                 return nil
             }
-            return CachedUser(user: user, facialVectors: vectors)
+            return CachedUser(user: user, featurePrints: prints)
         }
     }
     
@@ -50,20 +49,15 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     private func setupSession() -> Bool {
         session.beginConfiguration()
         defer { session.commitConfiguration() }
-        
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else { return false }
         self.videoDevice = device
-        
         do {
             let input = try AVCaptureDeviceInput(device: device)
             if session.canAddInput(input) { session.addInput(input) } else { return false }
-        } catch { print("Gagal membuat input kamera: \(error)"); return false }
-        
-        let videoOutput = AVCaptureVideoDataOutput()
+        } catch { return false }
         videoOutput.alwaysDiscardsLateVideoFrames = true
         videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue", qos: .userInitiated))
         if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) } else { return false }
-        
         session.sessionPreset = .hd1920x1080
         return true
     }
@@ -76,123 +70,125 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     func stopSession() {
         if session.isRunning { session.stopRunning() }
     }
-    
+
+    // =================================================================
+    // KEMBALI KE LOGIKA YANG SEDERHANA DAN BENAR
+    // =================================================================
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard !isProcessingFrame, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        
         isProcessingFrame = true
         
-        let visionOrientation = visionOrientation(for: connection.videoRotationAngle)
-
-        let faceLandmarksRequest = VNDetectFaceLandmarksRequest { (request, error) in
-            defer { self.isProcessingFrame = false }
-            
-            guard let faceObservations = request.results as? [VNFaceObservation] else {
-                DispatchQueue.main.async { self.delegate?.cameraService(didDetect: [], recognizedUsers: [:]) }
+        // HANYA DETEKSI KOTAK WAJAH. TIDAK PERLU LANDMARKS.
+        let faceDetectionRequest = VNDetectFaceRectanglesRequest { [weak self] (request, error) in
+            guard let self = self,
+                  let faceObservations = request.results as? [VNFaceObservation],
+                  !faceObservations.isEmpty else {
+                
+                DispatchQueue.main.async { self?.delegate?.cameraService(didDetect: [], recognizedUsers: [:]) }
+                self?.isProcessingFrame = false
                 return
             }
             
-            self.process(faceObservations: faceObservations)
+            // Proses wajah yang ditemukan
+            self.process(faceObservations: faceObservations, in: pixelBuffer)
         }
-        
+        faceDetectionRequest.revision = VNDetectFaceRectanglesRequestRevision3
+
         do {
-            try VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: visionOrientation).perform([faceLandmarksRequest])
+            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
+            try handler.perform([faceDetectionRequest])
         } catch {
-            print("Gagal melakukan request deteksi wajah: \(error)"); isProcessingFrame = false
+            print("Gagal deteksi wajah: \(error)")
+            isProcessingFrame = false
         }
     }
-    
-    private func process(faceObservations: [VNFaceObservation]) {
-        if faceObservations.isEmpty {
+
+    private func process(faceObservations: [VNFaceObservation], in pixelBuffer: CVPixelBuffer) {
+        if isRecognitionLocked {
             DispatchQueue.main.async {
-                self.delegate?.cameraService(didDetect: [], recognizedUsers: [:])
+                self.delegate?.cameraService(didDetect: faceObservations, recognizedUsers: [:])
             }
+            isProcessingFrame = false
             return
         }
-        
+
+        let recognitionHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
         var recognitionResults: [UUID: User?] = [:]
         let dispatchGroup = DispatchGroup()
 
         for face in faceObservations {
             dispatchGroup.enter()
-            guard let landmarks = face.landmarks, let liveVector = landmarks.toFacialVector() else {
-                recognitionResults[face.uuid] = nil
-                dispatchGroup.leave()
-                continue
-            }
             
-            let recognizedUser = self.verify(liveVector: liveVector)
-            recognitionResults[face.uuid] = recognizedUser
+            let featurePrintRequest = VNGenerateImageFeaturePrintRequest()
+            // GUNAKAN regionOfInterest, INI CARA YANG BENAR.
+            featurePrintRequest.regionOfInterest = face.boundingBox
+
+            do {
+                try recognitionHandler.perform([featurePrintRequest])
+                if let liveFeaturePrint = featurePrintRequest.results?.first {
+                    let recognizedUser = self.verify(liveFeaturePrint: liveFeaturePrint)
+                    recognitionResults[face.uuid] = recognizedUser
+                    
+                    if recognizedUser != nil {
+                        self.isRecognitionLocked = true
+                    }
+                } else {
+                    recognitionResults[face.uuid] = nil
+                }
+            } catch {
+                recognitionResults[face.uuid] = nil
+            }
             dispatchGroup.leave()
         }
-        
+
         dispatchGroup.notify(queue: .global()) {
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
                 self.delegate?.cameraService(didDetect: faceObservations, recognizedUsers: recognitionResults)
+                if self.isRecognitionLocked {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                        self.isRecognitionLocked = false
+                    }
+                }
+                self.isProcessingFrame = false
             }
         }
     }
-    
-    // THE KEY FIX: A robust K-Nearest Neighbors (KNN) voting system.
-    private func verify(liveVector: FacialVector) -> User? {
-        guard !self.cachedUsers.isEmpty else { return nil }
 
-        let allStoredVectors: [(user: User, vector: FacialVector)] = self.cachedUsers.flatMap { cachedUser in
-            cachedUser.facialVectors.map { (user: cachedUser.user, vector: $0) }
+    private func verify(liveFeaturePrint: VNFeaturePrintObservation) -> User? {
+        var closestMatch: (user: User, distance: Float)? = nil
+
+        for cachedUser in self.cachedUsers {
+            var bestDistanceForThisUser: Float = .greatestFiniteMagnitude
+            
+            for storedPrint in cachedUser.featurePrints {
+                do {
+                    var distance: Float = 0.0
+                    try liveFeaturePrint.computeDistance(&distance, to: storedPrint)
+                    
+                    if distance < bestDistanceForThisUser {
+                        bestDistanceForThisUser = distance
+                    }
+                } catch { continue }
+            }
+            
+            if closestMatch == nil || bestDistanceForThisUser < closestMatch!.distance {
+                closestMatch = (user: cachedUser.user, distance: bestDistanceForThisUser)
+            }
         }
-
-        guard !allStoredVectors.isEmpty else { return nil }
-
-        // 1. Calculate the distance from the live face to ALL stored vectors.
-        var allMatches = allStoredVectors.map { storedData in
-            let distance = liveVector.euclideanDistance(to: storedData.vector)
-            return (user: storedData.user, distance: distance)
-        }
         
-        // 2. Sort by the closest distance (smallest is best).
-        allMatches.sort { $0.distance < $1.distance }
+        guard let bestMatch = closestMatch else { return nil }
         
-        // 3. Take the top 'k' candidates. Let's use 11 for a clear majority.
-        let k = 11
-        let nearestNeighbors = allMatches.prefix(k)
+        // KUNCI UTAMA ADA DI SINI. KITA PAKAI THRESHOLD SUPER KETAT.
+        let threshold: Float = 0.8
         
-        // 4. Filter out candidates that are too far away (likely a random person).
-        // This is a crucial step to reject unknown faces.
-        let validNeighbors = nearestNeighbors.filter { $0.distance < self.recognitionThreshold }
+        print("Jarak terdekat: \(bestMatch.user.name) (\(String(format: "%.4f", bestMatch.distance))) | Ambang batas: \(threshold)")
         
-        // If no neighbors are close enough, it's an unknown person.
-        guard !validNeighbors.isEmpty else { return nil }
-        
-        // 5. Perform the vote: Count how many times each user ID appears in the valid neighbors.
-        // The 'Dictionary(grouping:by:)' is a very efficient way to do this.
-        let votes = Dictionary(grouping: validNeighbors, by: { $0.user.id })
-            .mapValues { $0.count }
-        
-        // 6. Find the user with the most votes.
-        guard let winner = votes.max(by: { $0.value < $1.value }) else {
+        if bestMatch.distance < threshold {
+            return bestMatch.user
+        } else {
             return nil
-        }
-        
-        // 7. Confidence Check: Ensure the winner has a clear majority.
-        // The winner must have more than half of the votes to be considered valid.
-        let majorityThreshold = validNeighbors.count / 2
-        guard winner.value > majorityThreshold else {
-            // This handles cases where the votes are split, e.g., 4 votes for Sam, 3 for Lusi.
-            // It's too ambiguous, so we reject.
-            // print("REJECTED: No clear majority. Winner only has \(winner.value) of \(validNeighbors.count) valid votes.")
-            return nil
-        }
-        
-        // 8. Find the full User object for the winning ID.
-        return self.cachedUsers.first(where: { $0.user.id == winner.key })?.user
-    }
-    
-    private func visionOrientation(for videoRotationAngle: CGFloat) -> CGImagePropertyOrientation {
-        switch videoRotationAngle {
-        case 0: return .up
-        case 90: return .right
-        case 180: return .down
-        case 270: return .left
-        default: return .right
         }
     }
 }

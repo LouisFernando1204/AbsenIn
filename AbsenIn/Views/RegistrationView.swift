@@ -83,77 +83,85 @@ struct PhotoTakingView: View {
 
     var body: some View {
         VStack {
-            if viewModel.isFinished { SavingView() }
-            else {
+            if viewModel.isFinished {
+                SavingView()
+            } else {
                 ZStack {
-                    CameraPreview(session: viewModel.photoService.session, videoDevice: viewModel.photoService.videoDevice)
-                        .ignoresSafeArea()
-                        .onAppear { viewModel.photoService.startRunning() }
-                        .onDisappear { viewModel.photoService.stopRunning() }
+                    CameraPreview(
+                        session: viewModel.photoService.session,
+                        videoDevice: viewModel.photoService.videoDevice
+                    )
+                    .ignoresSafeArea()
+                    .onAppear { viewModel.photoService.startRunning() }
+                    .onDisappear { viewModel.photoService.stopRunning() }
+
                     VStack {
-                        InstructionView(instruction: viewModel.currentInstruction, status: viewModel.statusMessage)
+                        InstructionView(status: viewModel.statusMessage)
                         Spacer()
-                        // PERBAIKAN 3: Panggil ProgressIndicatorView dengan parameter yang sudah diperbarui.
-                        ProgressIndicatorView(totalPoses: viewModel.totalPoses, currentPoseIndex: viewModel.currentPoseIndex)
-                    }.padding(.vertical, 40)
+                        ProgressViewSection(count: viewModel.photosCapturedCount, total: 25)
+                    }
+                    .padding(.vertical, 40)
                 }
             }
         }
-        .navigationTitle("Pendaftaran Wajah").navigationBarTitleDisplayMode(.inline).navigationBarBackButtonHidden(true)
+        .navigationTitle("Pendaftaran Wajah")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .onAppear { viewModel.startRegistration() }
         .onReceive(viewModel.$isFinished) { finished in
-            if finished { viewModel.saveUser(context: modelContext, completion: onFinished) }
+            if finished {
+                viewModel.saveUser(context: modelContext, completion: onFinished)
+            }
         }
     }
-    
+
     struct InstructionView: View {
-        let instruction: String
         let status: String
         var body: some View {
             VStack {
-                Text(instruction).font(.title2).fontWeight(.bold)
-                Text(status).font(.subheadline).opacity(status.isEmpty ? 0 : 1)
+                Text("Lihat lurus ke depan dan tahan")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                Text(status)
+                    .font(.subheadline)
+                    .opacity(status.isEmpty ? 0 : 1)
             }
-            .foregroundColor(.white).padding().background(Color.black.opacity(0.6)).cornerRadius(10).animation(.easeInOut, value: status)
+            .foregroundColor(.white)
+            .padding()
+            .background(Color.black.opacity(0.6))
+            .cornerRadius(10)
+            .animation(.easeInOut, value: status)
         }
     }
-    
-    // PERBAIKAN 1: Ubah total struct ProgressIndicatorView.
-    struct ProgressIndicatorView: View {
-        let totalPoses: Int
-        let currentPoseIndex: Int
-        
+
+    struct ProgressViewSection: View {
+        let count: Int
+        let total: Int
+
         var body: some View {
             VStack(spacing: 15) {
-                Text("Pose \(min(currentPoseIndex + 1, totalPoses)) dari \(totalPoses)")
-                    .font(.headline).foregroundColor(.white)
-                
-                HStack(spacing: 10) {
-                    ForEach(0..<totalPoses, id: \.self) { index in
-                        
-                        Circle()
-                            .fill(colorFor(index: index))
-                            .frame(width: 15, height: 15)
-                    }
-                }
-                .animation(.default, value: currentPoseIndex)
+                Text("Mengambil foto \(count) dari \(total)")
+                    .font(.headline)
+                    .foregroundColor(.white)
+
+                ProgressView(value: Float(count), total: Float(total))
+                    .progressViewStyle(LinearProgressViewStyle(tint: .green))
+                    .frame(width: 200)
             }
-            .padding().background(Color.black.opacity(0.6)).cornerRadius(10)
-        }
-        
-        private func colorFor(index: Int) -> Color {
-            if index <= currentPoseIndex {
-                return .green
-            } else {
-                return Color.gray
-            }
+            .padding()
+            .background(Color.black.opacity(0.6))
+            .cornerRadius(10)
         }
     }
-    
+
     struct SavingView: View {
         var body: some View {
             VStack(spacing: 20) {
-                Spacer(); ProgressView(); Text("Menyimpan data, mohon tunggu...").font(.headline); Spacer()
+                Spacer()
+                ProgressView()
+                Text("Menyimpan data, mohon tunggu...")
+                    .font(.headline)
+                Spacer()
             }
         }
     }
