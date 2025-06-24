@@ -1,0 +1,18 @@
+{
+  "Inputs" : {
+    "input" : {
+      "MLFeatureShortDescription" : "Input data"
+    }
+  },
+  "Outputs" : {
+    "embeddings" : {
+      "MLFeatureShortDescription" : "Out data"
+    }
+  },
+  "TrainingInputs" : {
+
+  },
+  "States" : {
+
+  }
+}

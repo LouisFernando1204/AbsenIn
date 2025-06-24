@@ -1,172 +1,97 @@
-// PhotoRegistrationViewModel.swift (FINAL YANG BENAR - DENGAN CROPPING)
-
 import SwiftUI
 import Vision
 import SwiftData
 
 @MainActor
-class PhotoRegistrationViewModel: ObservableObject {
-    private let totalPhotosToCapture = 25
-
-    @Published var photosCapturedCount = 0
-    @Published var isFinished = false
-    @Published var statusMessage = "Bersiap..."
+class PhotoRegistrationViewModel: ObservableObject, ImprovedRealtimeCameraServiceDelegate {
+    @Published var statusMessage: String = "Posisikan wajah di dalam bingkai"
+    @Published var isFinished: Bool = false
+    @Published var faceObservation: VNFaceObservation?
     
-    private var hasSavedUser = false
-
-    let photoService = PhotoCaptureService()
+    let cameraService = ImprovedRealtimeCameraService()
     private let userName: String
-    private var captureTimer: Timer?
-    private var capturedFeaturePrints: [VNFeaturePrintObservation] = []
-    
-    private let registrationInstructions = [
-        "Lihat lurus ke depan",
-        "Putar kepala sedikit ke kiri",
-        "Putar kepala sedikit ke kanan",
-        "Angkat dagu sedikit",
-        "Tundukkan dagu sedikit"
-    ]
-    private var instructionIndex = 0
+    private var isAttemptingCapture = false
+    private var modelContext: ModelContext?
+    private var onComplete: (() -> Void)?
 
     init(userName: String) {
         self.userName = userName
+        self.cameraService.delegate = self
     }
 
-    func startRegistration() {
-        statusMessage = "Posisikan wajah di dalam bingkai"
-        photoService.startRunning()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            self.startCapturingPhotos()
-        }
-    }
+    func start() { cameraService.prepare(); cameraService.startSession() }
+    func stop() { cameraService.stopSession() }
 
-    private func startCapturingPhotos() {
-        statusMessage = registrationInstructions[instructionIndex]
-        captureTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.captureAndProcessPhoto()
-        }
-    }
-
-    private func captureAndProcessPhoto() {
-        guard !isFinished else { return }
-        
-        photoService.capturePhoto { [weak self] image in
-            guard let self = self, let image = image else {
-                DispatchQueue.main.async { self?.statusMessage = "Gagal mengambil foto. Coba lagi." }
-                return
-            }
-            self.processImage(image)
-        }
+    func setDependencies(context: ModelContext, onComplete: @escaping () -> Void) {
+        self.modelContext = context
+        self.onComplete = onComplete
     }
     
-    // =================================================================
-    // FUNGSI INTI DENGAN LOGIKA CROPPING YANG BENAR
-    // =================================================================
-    private func processImage(_ image: UIImage) {
-        guard let cgImage = image.cgImage else { return }
+    func attemptRegistration() {
+        self.statusMessage = "Menganalisis..."
+        self.isAttemptingCapture = true
+    }
 
-        // Langkah 1: Deteksi kotak wajah pada gambar penuh
-        let faceDetectionRequest = VNDetectFaceRectanglesRequest { [weak self] (request, error) in
-            guard let self = self,
-                  let results = request.results as? [VNFaceObservation],
-                  let face = results.first else {
-                DispatchQueue.main.async { self?.statusMessage = "Wajah tidak terdeteksi." }
-                return
-            }
-            
-            // Langkah 2: CROP gambar asli HANYA pada bagian wajah
-            guard let faceImage = self.cropFace(from: image, with: face.boundingBox) else {
-                DispatchQueue.main.async { self.statusMessage = "Gagal memotong gambar wajah." }
-                return
-            }
-            
-            // Langkah 3: Buat feature print dari GAMBAR HASIL CROP
-            guard let croppedCGImage = faceImage.cgImage else { return }
-            
-            let handler = VNImageRequestHandler(cgImage: croppedCGImage, orientation: .up)
-            let featurePrintRequest = VNGenerateImageFeaturePrintRequest()
-            
-            do {
-                try handler.perform([featurePrintRequest])
-                if let featurePrint = featurePrintRequest.results?.first {
-                    DispatchQueue.main.async {
-                        self.handleSuccessfulCapture(with: featurePrint)
-                    }
-                } else {
-                    DispatchQueue.main.async { self.statusMessage = "Gagal memproses fitur wajah." }
-                }
-            } catch {
-                DispatchQueue.main.async { self.statusMessage = "Error proses: \(error.localizedDescription)" }
-            }
+    func cameraService(didProduce scanResult: ScanResult) {
+        var currentObservation: VNFaceObservation?
+        switch scanResult {
+        case .searching, .multipleFaces, .error, .verifying:
+            currentObservation = nil
+        case .lowQuality(let obs, _), .noMatch(let obs, _), .match(_, let obs, _):
+            currentObservation = obs
         }
-        faceDetectionRequest.revision = VNDetectFaceRectanglesRequestRevision3
+        self.faceObservation = currentObservation
 
-        // Eksekusi deteksi pada gambar penuh
+        guard isAttemptingCapture else { return }
+        self.isAttemptingCapture = false
+
+        var face: VNFaceObservation?
+        var buffer: CVPixelBuffer?
+        switch scanResult {
+        case .lowQuality(let obs, let pb), .noMatch(let obs, let pb), .match(_, let obs, let pb):
+            face = obs; buffer = pb
+        default:
+            handleFailure("Wajah tidak ditemukan."); return
+        }
+        
+        guard let finalFace = face, let finalBuffer = buffer else {
+            handleFailure("Error internal, coba lagi."); return
+        }
+        
+        guard let image = CGImage.create(from: finalBuffer) else {
+            handleFailure("Gagal memproses frame."); return
+        }
+        
+        statusMessage = "Menyimpan fitur..."
+        ImprovedFaceNetService.shared.generateEmbedding(from: image, for: finalFace) { [weak self] values in
+            guard let self = self, let values = values else {
+                self?.handleFailure("Gagal membuat fitur wajah."); return
+            }
+            self.saveUser(embedding: FacialVector(values: values))
+        }
+    }
+
+    private func handleFailure(_ message: String) {
+        DispatchQueue.main.async {
+            self.statusMessage = message
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { self.statusMessage = "Posisikan wajah di dalam bingkai" }
+        }
+    }
+
+    private func saveUser(embedding: FacialVector) {
+        guard let context = modelContext, let onComplete = onComplete else {
+            handleFailure("Error Internal."); return
+        }
         do {
-            let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .leftMirrored)
-            try handler.perform([faceDetectionRequest])
-        } catch {
-            DispatchQueue.main.async { self.statusMessage = "Error deteksi: \(error.localizedDescription)" }
-        }
-    }
-    
-    /// Fungsi helper untuk memotong UIImage berdasarkan bounding box dari Vision
-    private func cropFace(from image: UIImage, with boundingBox: CGRect) -> UIImage? {
-        guard let cgImage = image.cgImage else { return nil }
-
-        // Koordinat Vision (bawah-kiri) berbeda dengan Core Graphics (atas-kiri).
-        // Kita perlu mengonversinya.
-        let imageWidth = CGFloat(cgImage.width)
-        let imageHeight = CGFloat(cgImage.height)
-        
-        let cropRect = CGRect(
-            x: boundingBox.origin.x * imageWidth,
-            y: (1 - boundingBox.origin.y - boundingBox.height) * imageHeight,
-            width: boundingBox.width * imageWidth,
-            height: boundingBox.height * imageHeight
-        )
-        
-        // Lakukan cropping
-        if let croppedCGImage = cgImage.cropping(to: cropRect) {
-            return UIImage(cgImage: croppedCGImage)
-        }
-        
-        return nil
-    }
-
-    // Fungsi handleSuccessfulCapture dan saveUser tidak perlu diubah
-    private func handleSuccessfulCapture(with featurePrint: VNFeaturePrintObservation) {
-        capturedFeaturePrints.append(featurePrint)
-        photosCapturedCount += 1
-        
-        if photosCapturedCount % 5 == 0 && photosCapturedCount < totalPhotosToCapture {
-            instructionIndex += 1
-            if instructionIndex < registrationInstructions.count {
-                statusMessage = registrationInstructions[instructionIndex]
-            }
-        }
-
-        if photosCapturedCount >= totalPhotosToCapture {
-            isFinished = true
-            captureTimer?.invalidate()
-            photoService.stopRunning()
-            statusMessage = "Pengambilan data selesai!"
-        }
-    }
-
-    func saveUser(context: ModelContext, completion: @escaping () -> Void) {
-        guard !hasSavedUser else { return }
-        hasSavedUser = true
-        guard !capturedFeaturePrints.isEmpty else { completion(); return }
-        do {
-            let featurePrintData = try NSKeyedArchiver.archivedData(withRootObject: capturedFeaturePrints, requiringSecureCoding: true)
-            let newUser = User(name: userName, facialVectorData: featurePrintData)
+            let data = try JSONEncoder().encode(embedding)
+            let newUser = User(name: self.userName, facialEmbeddingData: data)
             context.insert(newUser)
             try context.save()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { completion() }
+            self.isFinished = true
+            self.statusMessage = "Pendaftaran Berhasil!"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { onComplete() }
         } catch {
-            print("❌ Gagal menyimpan pengguna: \(error)")
-            completion()
+            handleFailure("Gagal menyimpan data.")
         }
     }
 }

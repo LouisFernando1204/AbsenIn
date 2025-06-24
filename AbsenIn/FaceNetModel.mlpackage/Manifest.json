@@ -1,0 +1,24 @@
+{
+    "fileFormatVersion": "1.0.0",
+    "itemInfoEntries": {
+        "8FE4AB08-B82B-47D9-B7BF-D2713CD6D593": {
+            "author": "com.apple.CoreML",
+            "description": "External Metadata Overlay",
+            "name": "Metadata.json",
+            "path": "com.apple.CoreML/Metadata.json"
+        },
+        "B0EF429B-C344-4D01-8307-C73F91470C91": {
+            "author": "com.apple.CoreML",
+            "description": "External FeatureDescription Overlay",
+            "name": "FeatureDescriptions.json",
+            "path": "com.apple.CoreML/FeatureDescriptions.json"
+        },
+        "CC3C1554-BE26-41E3-9249-860680EC3EB2": {
+            "author": "com.apple.CoreML",
+            "description": "CoreML Model Specification",
+            "name": "FaceNetModel.mlmodel",
+            "path": "com.apple.CoreML/FaceNetModel.mlmodel"
+        }
+    },
+    "rootModelIdentifier": "CC3C1554-BE26-41E3-9249-860680EC3EB2"
+}

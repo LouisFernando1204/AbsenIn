@@ -1,0 +1,9 @@
+{
+  "MLModelVersionStringKey" : "1.0",
+  "MLModelDescriptionKey" : "V1",
+  "MLModelCreatorDefinedKey" : {
+    "coremltoolsVersion" : "3.4"
+  },
+  "MLModelAuthorKey" : "Louis Mamang",
+  "MLModelLicenseKey" : "MIT"
+}

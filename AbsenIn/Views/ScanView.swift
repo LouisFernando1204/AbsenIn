@@ -1,58 +1,39 @@
-// ScanView.swift (GANTI SELURUH FILE)
-
 import SwiftUI
-import AVFoundation
 import SwiftData
+import Vision
 
 struct ScanView: View {
     @StateObject private var viewModel = ScanViewModel()
-    
     @Query(sort: \User.name) private var registeredUsers: [User]
     @Environment(\.modelContext) private var modelContext
     
     var body: some View {
         ZStack {
-            CameraPreview(
-                session: viewModel.cameraService.session,
-                videoDevice: viewModel.cameraService.videoDevice
-            )
-            .ignoresSafeArea()
+            CameraPreview(session: viewModel.cameraService.session)
+                .ignoresSafeArea()
             
-            // Overlay pemandu wajah yang lebih baik
-            faceOverlay
+            // --- THIS IS THE UI FIX ---
+            // Add the horizontal flip to match the mirrored camera preview.
+            // This will make the bounding box track your face correctly.
+            BoundingBoxView(
+                faceObservation: viewModel.faceObservation,
+                isMatch: viewModel.isMatch
+            )
+            .scaleEffect(x: -1, y: 1, anchor: .center)
+            // --- END FIX ---
             
             VStack {
-                statusMessageView
+                Text(viewModel.statusMessage)
+                    .fontWeight(.semibold).foregroundColor(.white).padding(.horizontal, 20).padding(.vertical, 12)
+                    .background(Color.black.opacity(0.6)).clipShape(Capsule()).padding(.top, 60)
+                    .animation(.easeInOut, value: viewModel.statusMessage)
                 Spacer()
             }
         }
-        .onAppear {
-            viewModel.activate(modelContext: modelContext, registeredUsers: Array(registeredUsers))
+        .onAppear { viewModel.activate(modelContext: modelContext, registeredUsers: Array(registeredUsers)) }
+        .onDisappear { viewModel.deactivate() }
+        .onChange(of: registeredUsers) {
+             viewModel.cameraService.updateRegisteredUsers(Array(registeredUsers))
         }
-        .onDisappear {
-            viewModel.cameraService.stopSession()
-        }
-    }
-    
-    // View untuk overlay pemandu wajah
-    private var faceOverlay: some View {
-        Circle()
-            .stroke(viewModel.isFaceDetected ? Color.green : Color.white, lineWidth: 5)
-            .frame(width: 300, height: 300)
-            .opacity(0.8)
-            .animation(.easeInOut(duration: 0.3), value: viewModel.isFaceDetected)
-    }
-    
-    // View untuk pesan status
-    private var statusMessageView: some View {
-        Text(viewModel.statusMessage)
-            .fontWeight(.semibold)
-            .foregroundColor(.white)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(Color.black.opacity(0.6))
-            .clipShape(Capsule())
-            .padding(.top, 60)
-            .animation(.easeInOut, value: viewModel.statusMessage)
     }
 }

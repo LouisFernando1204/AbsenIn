@@ -1,24 +1,16 @@
-// User.swift
-// TIDAK ADA PERUBAHAN. Strukturnya sudah tepat.
-
 import Foundation
 import SwiftData
-import Vision
 
 @Model
 final class User {
     @Attribute(.unique) var id: String
     var name: String
-    var registrationDate: Date
-    
-    // Data ini sekarang akan menyimpan [VNFeaturePrintObservation] yang di-serialize
-    @Attribute(.externalStorage)
-    var facialVectorData: Data?
-    
-    init(id: String = UUID().uuidString, name: String, registrationDate: Date = .now, facialVectorData: Data? = nil) {
-        self.id = id
-        self.name = name
-        self.registrationDate = registrationDate
-        self.facialVectorData = facialVectorData
+    @Attribute(.externalStorage) var facialEmbeddingData: Data?
+    init(id: String = UUID().uuidString, name: String, facialEmbeddingData: Data? = nil) {
+        self.id = id; self.name = name; self.facialEmbeddingData = facialEmbeddingData
+    }
+    func getEmbedding() -> FacialVector? {
+        guard let data = facialEmbeddingData else { return nil }
+        return try? JSONDecoder().decode(FacialVector.self, from: data)
     }
 }

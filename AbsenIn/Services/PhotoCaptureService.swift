@@ -1,13 +1,9 @@
-// PhotoCaptureService.swift (GANTI SELURUH FILE)
-
 import AVFoundation
 import UIKit
 
-class PhotoCaptureService: NSObject {
+class PhotoCaptureService: NSObject, AVCapturePhotoCaptureDelegate {
     let session = AVCaptureSession()
-    
     private(set) var videoDevice: AVCaptureDevice?
-    
     private var photoOutput = AVCapturePhotoOutput()
     private var photoCaptureCompletion: ((UIImage?) -> Void)?
 
@@ -21,10 +17,9 @@ class PhotoCaptureService: NSObject {
         defer { session.commitConfiguration() }
 
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
-            print("Kamera depan tidak ditemukan.")
+            print("Front camera not found.")
             return
         }
-        
         self.videoDevice = device
 
         do {
@@ -33,7 +28,7 @@ class PhotoCaptureService: NSObject {
                 session.addInput(input)
             }
         } catch {
-            print("Gagal membuat input kamera: \(error)")
+            print("Failed to create camera input: \(error)")
             return
         }
 
@@ -41,8 +36,6 @@ class PhotoCaptureService: NSObject {
             session.addOutput(photoOutput)
         }
         
-        // PERBAIKAN PENTING: Samakan preset sesi dengan RealtimeCameraService.
-        // Ini sangat krusial untuk konsistensi antara data registrasi dan data scan.
         session.sessionPreset = .hd1920x1080
     }
 
@@ -63,25 +56,26 @@ class PhotoCaptureService: NSObject {
     func capturePhoto(completion: @escaping (UIImage?) -> Void) {
         self.photoCaptureCompletion = completion
         
-        // Cukup buat objek settings standar. iOS akan memilih format terbaik
-        // yang kompatibel dengan sesi yang sedang berjalan.
+        // FIX: Ensure the settings are compatible with the delegate.
         let settings = AVCapturePhotoSettings()
         
-        // Pastikan orientasi foto sesuai dengan preview
+        // FIX: The orientation of the output photo's data must be set correctly.
+        // This ensures the image data itself is oriented properly for Vision analysis.
         if let connection = photoOutput.connection(with: .video) {
-            connection.videoRotationAngle = 90
+            // This is the rotation for portrait holding
+            if connection.isVideoRotationAngleSupported(90) {
+                 connection.videoRotationAngle = 90
+            }
         }
         
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
-}
 
-extension PhotoCaptureService: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         guard error == nil,
               let imageData = photo.fileDataRepresentation(),
               let image = UIImage(data: imageData) else {
-            print("Gagal memproses foto: \(error?.localizedDescription ?? "error tidak diketahui")")
+            print("Failed to process photo: \(error?.localizedDescription ?? "unknown error")")
             photoCaptureCompletion?(nil)
             return
         }
