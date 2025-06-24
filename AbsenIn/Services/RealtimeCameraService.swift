@@ -156,9 +156,12 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         }
     }
 
-    private func verify(liveFeaturePrint: VNFeaturePrintObservation) -> User? {
-        var closestMatch: (user: User, distance: Float)? = nil
+    // RealtimeCameraService.swift -> GANTI FUNGSI VERIFY DENGAN INI
 
+    private func verify(liveFeaturePrint: VNFeaturePrintObservation) -> User? {
+        var allMatches: [(user: User, distance: Float)] = []
+
+        // Langkah 1: Hitung jarak dari wajah live ke SEMUA pengguna terdaftar
         for cachedUser in self.cachedUsers {
             var bestDistanceForThisUser: Float = .greatestFiniteMagnitude
             
@@ -166,29 +169,63 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
                 do {
                     var distance: Float = 0.0
                     try liveFeaturePrint.computeDistance(&distance, to: storedPrint)
-                    
                     if distance < bestDistanceForThisUser {
                         bestDistanceForThisUser = distance
                     }
                 } catch { continue }
             }
+            // Simpan hasil jarak terbaik untuk setiap pengguna
+            allMatches.append((user: cachedUser.user, distance: bestDistanceForThisUser))
+        }
+        
+        // Pastikan kita punya data untuk dibandingkan
+        guard !allMatches.isEmpty else { return nil }
+        
+        // Langkah 2: Urutkan semua hasil dari jarak terendah ke tertinggi
+        allMatches.sort { $0.distance < $1.distance }
+        
+        // Cetak semua jarak untuk debugging yang lebih baik
+        let debugString = allMatches.map { "\($0.user.name): \(String(format: "%.4f", $0.distance))" }.joined(separator: ", ")
+        print("[DEBUG] Semua Jarak: \(debugString)")
+
+        // Langkah 3: Ambil kandidat terbaik (jarak terendah)
+        guard let bestMatch = allMatches.first else { return nil }
+        
+        // =================================================================
+        // LOGIKA INTI YANG BARU
+        // =================================================================
+        
+        // Aturan 1: Kandidat terbaik harus di bawah ambang batas absolut.
+        // Kita bisa buat ini sedikit lebih longgar karena ada aturan kedua.
+        let absoluteThreshold: Float = 0.85
+        
+        guard bestMatch.distance < absoluteThreshold else {
+            print("❌ TIDAK COCOK: Jarak terdekat \(bestMatch.user.name) (\(String(format: "%.4f", bestMatch.distance))) di atas ambang batas absolut \(absoluteThreshold).")
+            return nil
+        }
+        
+        // Aturan 2 (Confidence Check): Jika ada lebih dari satu pengguna, periksa jaraknya dengan kandidat kedua.
+        if allMatches.count > 1 {
+            let secondBestMatch = allMatches[1]
             
-            if closestMatch == nil || bestDistanceForThisUser < closestMatch!.distance {
-                closestMatch = (user: cachedUser.user, distance: bestDistanceForThisUser)
+            // Hitung "jarak pemisah" antara kandidat terbaik dan kedua terbaik.
+            let separationDistance = secondBestMatch.distance - bestMatch.distance
+            
+            // Tentukan ambang batas keyakinan. Jika jarak pemisahnya tidak cukup besar,
+            // artinya sistem tidak yakin.
+            let confidenceThreshold: Float = 0.1 // Bisa disesuaikan. Semakin besar, semakin harus dominan.
+            
+            print("----> Kandidat Terbaik: \(bestMatch.user.name) (\(String(format: "%.4f", bestMatch.distance))). Kandidat Kedua: \(secondBestMatch.user.name) (\(String(format: "%.4f", secondBestMatch.distance))).")
+            print("----> Jarak Pemisah: \(String(format: "%.4f", separationDistance)) | Ambang Keyakinan: \(confidenceThreshold)")
+            
+            guard separationDistance > confidenceThreshold else {
+                print("❌ TIDAK YAKIN: Jarak antara kandidat pertama dan kedua terlalu dekat. Wajah tidak dikenali.")
+                return nil
             }
         }
         
-        guard let bestMatch = closestMatch else { return nil }
-        
-        // KUNCI UTAMA ADA DI SINI. KITA PAKAI THRESHOLD SUPER KETAT.
-        let threshold: Float = 0.8
-        
-        print("Jarak terdekat: \(bestMatch.user.name) (\(String(format: "%.4f", bestMatch.distance))) | Ambang batas: \(threshold)")
-        
-        if bestMatch.distance < threshold {
-            return bestMatch.user
-        } else {
-            return nil
-        }
+        // Jika lolos semua aturan, kita yakin dengan hasilnya.
+        print("✅ COCOK & YAKIN: \(bestMatch.user.name) adalah pemenang yang jelas.")
+        return bestMatch.user
     }
 }
