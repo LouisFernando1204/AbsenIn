@@ -1,4 +1,4 @@
-// ScanViewModel.swift (GANTI SELURUH FILE)
+// ScanViewModel.swift (FINAL - Perbaikan Pesan Sukses yang Hilang)
 
 import SwiftUI
 import Vision
@@ -7,14 +7,14 @@ import SwiftData
 @MainActor
 class ScanViewModel: ObservableObject {
     @Published var statusMessage: String = "Posisikan wajah di dalam bingkai"
-    @Published var isFaceDetected: Bool = false // Hanya untuk feedback UI
+    @Published var isFaceDetected: Bool = false
     
     let cameraService = RealtimeCameraService()
     private var modelContext: ModelContext?
     private var todaysAttendedUserIDs = Set<String>()
     
-    // Flag untuk memastikan kita tidak memproses absensi berkali-kali dalam satu sesi pengenalan
-    private var isProcessingAttendance = false
+    // State baru untuk menandai kita sedang dalam fase cooldown SETELAH pesan sukses ditampilkan.
+    private var isDisplayingSuccessMessage = false
 
     init() {
         cameraService.delegate = self
@@ -22,8 +22,6 @@ class ScanViewModel: ObservableObject {
     
     func activate(modelContext: ModelContext, registeredUsers: [User]) {
         self.modelContext = modelContext
-        self.isProcessingAttendance = false // Reset saat diaktifkan
-        
         self.cameraService.updateRegisteredUsers(registeredUsers)
         self.fetchTodaysAttendance()
         
@@ -37,8 +35,11 @@ class ScanViewModel: ObservableObject {
         }
     }
     
+    func deactivate() {
+        cameraService.stopSession()
+    }
+    
     private func fetchTodaysAttendance() {
-        // ... (fungsi ini sudah benar, tidak perlu diubah)
         guard let context = modelContext else { return }
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: Date())
@@ -52,69 +53,75 @@ class ScanViewModel: ObservableObject {
         }
     }
     
-    private func recordAttendance(for user: User) {
-        guard !isProcessingAttendance, let context = modelContext else { return }
-        isProcessingAttendance = true // Kunci proses absensi
+    // Fungsi ini sekarang mengatur pesan sukses dan flag penanda
+    private func processSuccessfulRecognition(for user: User) {
+        // Jangan proses jika sudah dalam mode menampilkan pesan sukses
+        guard !isDisplayingSuccessMessage else { return }
         
+        // Aktifkan mode menampilkan pesan sukses
+        isDisplayingSuccessMessage = true
+        
+        // Cek apakah sudah absen
         if todaysAttendedUserIDs.contains(user.id) {
             statusMessage = "✅ \(user.name) sudah absen hari ini."
-            resetAfterDelay()
-            return
+        } else {
+            // Catat absensi
+            guard let context = modelContext else { return }
+            let newRecord = AttendanceRecord(userID: user.id, userName: user.name)
+            context.insert(newRecord)
+            do {
+                try context.save()
+                todaysAttendedUserIDs.insert(user.id)
+                let timeString = Date().formatted(date: .omitted, time: .standard)
+                statusMessage = "✅ Absen berhasil: \(user.name) pukul \(timeString)"
+            } catch {
+                statusMessage = "❌ Gagal menyimpan data."
+            }
         }
         
-        let newRecord = AttendanceRecord(userID: user.id, userName: user.name)
-        context.insert(newRecord)
-        
-        do {
-            try context.save()
-            todaysAttendedUserIDs.insert(user.id)
-            let timeString = Date().formatted(date: .omitted, time: .standard)
-            statusMessage = "✅ Absen berhasil: \(user.name) pukul \(timeString)"
-            resetAfterDelay()
-        } catch {
-            print("Gagal menyimpan absensi: \(error)")
-            statusMessage = "❌ Gagal menyimpan data absensi."
-            isProcessingAttendance = false // Buka kunci jika gagal
-        }
-    }
-    
-    // Reset status setelah beberapa detik
-    private func resetAfterDelay(seconds: TimeInterval = 3.0) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
-            self.isProcessingAttendance = false
+        // Atur timer untuk mengakhiri mode pesan sukses
+        // Durasi harus sama dengan lock di service
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            self.isDisplayingSuccessMessage = false
+            // Reset pesan ke default setelah jeda selesai
             self.statusMessage = "Posisikan wajah di dalam bingkai"
         }
     }
 }
 
-// Implementasi delegate yang lebih ringkas
+// MARK: - RealtimeCameraServiceDelegate
 extension ScanViewModel: RealtimeCameraServiceDelegate {
+    
     func cameraService(didDetect observations: [VNFaceObservation], recognizedUsers: [UUID : User?]) {
-        // Jangan ubah status jika sedang menampilkan pesan sukses/gagal
-        if isProcessingAttendance {
+        
+        // PERUBAHAN LOGIKA UTAMA DI SINI:
+        // Jika kita sedang menampilkan pesan sukses, jangan lakukan apa-apa. Biarkan pesan itu tampil.
+        if isDisplayingSuccessMessage {
+            isFaceDetected = !observations.isEmpty // Tetap update overlay
             return
         }
 
         guard let face = observations.first else {
             isFaceDetected = false
-            statusMessage = observations.isEmpty ? "Posisikan wajah di dalam bingkai" : "Hanya satu wajah yang diizinkan"
+            statusMessage = "Posisikan wajah di dalam bingkai"
             return
         }
         
         isFaceDetected = true
-        
-        // Periksa hasil pengenalan dari service
+
         if let recognizedResult = recognizedUsers[face.uuid] {
+            // Service memberikan hasil (tidak sedang di-lock)
             if let user = recognizedResult {
-                // Pengguna dikenali, catat absensi
-                recordAttendance(for: user)
+                // Pengguna dikenali -> mulai siklus sukses
+                processSuccessfulRecognition(for: user)
             } else {
-                // Wajah terdeteksi tapi tidak cocok dengan siapa pun
+                // Wajah terdeteksi tapi tidak cocok
                 statusMessage = "Wajah tidak dikenali"
             }
         } else {
-            // Wajah terdeteksi, sedang dalam proses verifikasi...
-             statusMessage = "Memverifikasi..."
+            // Service TIDAK memberikan hasil (karena sedang di-lock)
+            // Pesan ini hanya akan muncul sebelum pengenalan pertama berhasil
+            statusMessage = "Memverifikasi..."
         }
     }
 }
