@@ -1,12 +1,10 @@
-// PhotoRegistrationViewModel.swift (FINAL YANG BENAR - DENGAN CROPPING)
-
 import SwiftUI
 import Vision
 import SwiftData
 
 @MainActor
 class PhotoRegistrationViewModel: ObservableObject {
-    private let totalPhotosToCapture = 25
+    let totalPhotosToCapture = 25
 
     @Published var photosCapturedCount = 0
     @Published var isFinished = false
@@ -19,14 +17,25 @@ class PhotoRegistrationViewModel: ObservableObject {
     private var captureTimer: Timer?
     private var capturedFeaturePrints: [VNFeaturePrintObservation] = []
     
-    private let registrationInstructions = [
-        "Lihat lurus ke depan",
-        "Putar kepala sedikit ke kiri",
-        "Putar kepala sedikit ke kanan",
-        "Angkat dagu sedikit",
-        "Tundukkan dagu sedikit"
+    private let registrationInstructions: [(text: String, symbol: String)] = [
+        ("Lihat lurus ke depan", "arrow.down.forward.and.arrow.up.backward"),
+        ("Putar kepala sedikit ke kiri", "arrow.left"),
+        ("Putar kepala sedikit ke kanan", "arrow.right"),
+        ("Angkat dagu sedikit", "arrow.up"),
+        ("Tundukkan dagu sedikit", "arrow.down")
     ]
-    private var instructionIndex = 0
+    
+    @Published private var instructionIndex = 0
+
+    var currentInstructionText: String {
+        guard instructionIndex < registrationInstructions.count else { return "Selesai!" }
+        return registrationInstructions[instructionIndex].text
+    }
+
+    var currentInstructionSymbol: String {
+        guard instructionIndex < registrationInstructions.count else { return "checkmark.circle.fill" }
+        return registrationInstructions[instructionIndex].symbol
+    }
 
     init(userName: String) {
         self.userName = userName
@@ -41,9 +50,10 @@ class PhotoRegistrationViewModel: ObservableObject {
     }
 
     private func startCapturingPhotos() {
-        statusMessage = registrationInstructions[instructionIndex]
         captureTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.captureAndProcessPhoto()
+            // PERBAIKAN 1: Membuka 'self' sebelum digunakan
+            guard let self = self else { return }
+            self.captureAndProcessPhoto()
         }
     }
 
@@ -51,36 +61,40 @@ class PhotoRegistrationViewModel: ObservableObject {
         guard !isFinished else { return }
         
         photoService.capturePhoto { [weak self] image in
-            guard let self = self, let image = image else {
-                DispatchQueue.main.async { self?.statusMessage = "Gagal mengambil foto. Coba lagi." }
+            // PERBAIKAN 2: Anda sudah punya guard di sini, jadi ini sudah benar.
+            // Namun, logic di dalamnya akan saya perbaiki sedikit agar lebih aman.
+            guard let self = self else { return }
+            
+            guard let image = image else {
+                self.statusMessage = "Gagal mengambil foto. Coba lagi."
                 return
             }
             self.processImage(image)
         }
     }
     
-    // =================================================================
-    // FUNGSI INTI DENGAN LOGIKA CROPPING YANG BENAR
-    // =================================================================
     private func processImage(_ image: UIImage) {
         guard let cgImage = image.cgImage else { return }
 
-        // Langkah 1: Deteksi kotak wajah pada gambar penuh
         let faceDetectionRequest = VNDetectFaceRectanglesRequest { [weak self] (request, error) in
-            guard let self = self,
-                  let results = request.results as? [VNFaceObservation],
+            // PERBAIKAN 3: Membuka 'self' di awal closure
+            guard let self = self else { return }
+            
+            guard let results = request.results as? [VNFaceObservation],
                   let face = results.first else {
-                DispatchQueue.main.async { self?.statusMessage = "Wajah tidak terdeteksi." }
+                DispatchQueue.main.async {
+                    self.statusMessage = "Wajah tidak terdeteksi."
+                }
                 return
             }
             
-            // Langkah 2: CROP gambar asli HANYA pada bagian wajah
             guard let faceImage = self.cropFace(from: image, with: face.boundingBox) else {
-                DispatchQueue.main.async { self.statusMessage = "Gagal memotong gambar wajah." }
+                DispatchQueue.main.async {
+                    self.statusMessage = "Gagal memotong gambar wajah."
+                }
                 return
             }
             
-            // Langkah 3: Buat feature print dari GAMBAR HASIL CROP
             guard let croppedCGImage = faceImage.cgImage else { return }
             
             let handler = VNImageRequestHandler(cgImage: croppedCGImage, orientation: .up)
@@ -93,29 +107,31 @@ class PhotoRegistrationViewModel: ObservableObject {
                         self.handleSuccessfulCapture(with: featurePrint)
                     }
                 } else {
-                    DispatchQueue.main.async { self.statusMessage = "Gagal memproses fitur wajah." }
+                    DispatchQueue.main.async {
+                        self.statusMessage = "Gagal memproses fitur wajah."
+                    }
                 }
             } catch {
-                DispatchQueue.main.async { self.statusMessage = "Error proses: \(error.localizedDescription)" }
+                DispatchQueue.main.async {
+                    self.statusMessage = "Error proses: \(error.localizedDescription)"
+                }
             }
         }
         faceDetectionRequest.revision = VNDetectFaceRectanglesRequestRevision3
 
-        // Eksekusi deteksi pada gambar penuh
         do {
             let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .leftMirrored)
             try handler.perform([faceDetectionRequest])
         } catch {
-            DispatchQueue.main.async { self.statusMessage = "Error deteksi: \(error.localizedDescription)" }
+            DispatchQueue.main.async {
+                self.statusMessage = "Error deteksi: \(error.localizedDescription)"
+            }
         }
     }
     
-    /// Fungsi helper untuk memotong UIImage berdasarkan bounding box dari Vision
     private func cropFace(from image: UIImage, with boundingBox: CGRect) -> UIImage? {
         guard let cgImage = image.cgImage else { return nil }
 
-        // Koordinat Vision (bawah-kiri) berbeda dengan Core Graphics (atas-kiri).
-        // Kita perlu mengonversinya.
         let imageWidth = CGFloat(cgImage.width)
         let imageHeight = CGFloat(cgImage.height)
         
@@ -126,7 +142,6 @@ class PhotoRegistrationViewModel: ObservableObject {
             height: boundingBox.height * imageHeight
         )
         
-        // Lakukan cropping
         if let croppedCGImage = cgImage.cropping(to: cropRect) {
             return UIImage(cgImage: croppedCGImage)
         }
@@ -134,23 +149,22 @@ class PhotoRegistrationViewModel: ObservableObject {
         return nil
     }
 
-    // Fungsi handleSuccessfulCapture dan saveUser tidak perlu diubah
     private func handleSuccessfulCapture(with featurePrint: VNFeaturePrintObservation) {
         capturedFeaturePrints.append(featurePrint)
         photosCapturedCount += 1
         
-        if photosCapturedCount % 5 == 0 && photosCapturedCount < totalPhotosToCapture {
+        let photosPerInstruction = totalPhotosToCapture / registrationInstructions.count
+        if photosCapturedCount % photosPerInstruction == 0 && photosCapturedCount < totalPhotosToCapture {
             instructionIndex += 1
-            if instructionIndex < registrationInstructions.count {
-                statusMessage = registrationInstructions[instructionIndex]
-            }
         }
-
+        
         if photosCapturedCount >= totalPhotosToCapture {
             isFinished = true
             captureTimer?.invalidate()
             photoService.stopRunning()
             statusMessage = "Pengambilan data selesai!"
+        } else {
+            statusMessage = "Foto \(photosCapturedCount) dari \(totalPhotosToCapture) berhasil..."
         }
     }
 
