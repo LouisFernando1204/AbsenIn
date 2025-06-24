@@ -98,7 +98,7 @@ struct PhotoTakingView: View {
                     VStack {
                         InstructionView(status: viewModel.statusMessage)
                         Spacer()
-                        ProgressViewSection(count: viewModel.photosCapturedCount, total: 25)
+                        ProgressViewSection(count: viewModel.photosCapturedCount, total: 30)
                     }
                     .padding(.vertical, 40)
                 }

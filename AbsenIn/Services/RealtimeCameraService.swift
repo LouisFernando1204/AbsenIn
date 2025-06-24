@@ -104,11 +104,17 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         }
     }
 
+    // RealtimeCameraService.swift -> FUNGSI process() yang sudah dirapikan
+
     private func process(faceObservations: [VNFaceObservation], in pixelBuffer: CVPixelBuffer) {
+        // 1. Cek kunci di awal. Jika terkunci, jangan proses sama sekali.
         if isRecognitionLocked {
+            // Cukup kirim observasi wajah tanpa hasil pengenalan.
             DispatchQueue.main.async {
                 self.delegate?.cameraService(didDetect: faceObservations, recognizedUsers: [:])
             }
+            // Jangan lupa set isProcessingFrame ke false agar frame berikutnya bisa diproses
+            // setelah jeda selesai.
             isProcessingFrame = false
             return
         }
@@ -116,22 +122,26 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         let recognitionHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
         var recognitionResults: [UUID: User?] = [:]
         let dispatchGroup = DispatchGroup()
+        
+        // Flag sementara untuk menandai apakah ada pengenalan yang berhasil di frame ini
+        var didRecognizeAnyoneInThisFrame = false
 
         for face in faceObservations {
             dispatchGroup.enter()
             
             let featurePrintRequest = VNGenerateImageFeaturePrintRequest()
-            // GUNAKAN regionOfInterest, INI CARA YANG BENAR.
             featurePrintRequest.regionOfInterest = face.boundingBox
 
             do {
                 try recognitionHandler.perform([featurePrintRequest])
                 if let liveFeaturePrint = featurePrintRequest.results?.first {
+                    // Panggil fungsi verify yang sudah cerdas
                     let recognizedUser = self.verify(liveFeaturePrint: liveFeaturePrint)
                     recognitionResults[face.uuid] = recognizedUser
                     
+                    // 2. Jika ada pengguna yang dikenali, set flag sementara.
                     if recognizedUser != nil {
-                        self.isRecognitionLocked = true
+                        didRecognizeAnyoneInThisFrame = true
                     }
                 } else {
                     recognitionResults[face.uuid] = nil
@@ -145,12 +155,22 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         dispatchGroup.notify(queue: .global()) {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
+                
+                // 3. Kirim hasil ke delegate
                 self.delegate?.cameraService(didDetect: faceObservations, recognizedUsers: recognitionResults)
-                if self.isRecognitionLocked {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                
+                // 4. KUNCI UTAMA: Aktifkan jeda HANYA JIKA ada yang berhasil dikenali.
+                if didRecognizeAnyoneInThisFrame {
+                    print("--- ‼️ PENGENALAN BERHASIL, SCAN DIKUNCI SELAMA 3 DETIK ‼️ ---")
+                    self.isRecognitionLocked = true
+                    // Atur timer untuk membuka kunci setelah jeda
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { // Jeda 3 detik
+                        print("--- ✅ KUNCI SCAN DIBUKA, SIAP UNTUK SCAN BERIKUTNYA ---")
                         self.isRecognitionLocked = false
                     }
                 }
+                
+                // Setel ulang flag pemrosesan frame
                 self.isProcessingFrame = false
             }
         }
