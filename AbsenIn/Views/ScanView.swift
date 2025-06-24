@@ -1,3 +1,5 @@
+// ScanView.swift (GANTI SELURUH FILE)
+
 import SwiftUI
 import AVFoundation
 import SwiftData
@@ -10,22 +12,17 @@ struct ScanView: View {
     
     var body: some View {
         ZStack {
-            CameraPreview(session: viewModel.cameraService.session)
-                .ignoresSafeArea()
+            CameraPreview(
+                session: viewModel.cameraService.session,
+                videoDevice: viewModel.cameraService.videoDevice
+            )
+            .ignoresSafeArea()
             
-            // PERBAIKAN UI: Menghapus bounding box dan menggunakan overlay lingkaran.
+            // Overlay pemandu wajah yang lebih baik
             faceOverlay
             
             VStack {
-                Text(viewModel.statusMessage)
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .padding()
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(10)
-                    .padding(.top, 40)
-                    .animation(.easeInOut, value: viewModel.statusMessage)
-                
+                statusMessageView
                 Spacer()
             }
         }
@@ -37,12 +34,25 @@ struct ScanView: View {
         }
     }
     
-    // Helper view untuk overlay pemandu wajah yang bersih.
+    // View untuk overlay pemandu wajah
     private var faceOverlay: some View {
         Circle()
-            .stroke(viewModel.isFaceWellPositioned ? Color.green : Color.white, lineWidth: 5)
+            .stroke(viewModel.isFaceDetected ? Color.green : Color.white, lineWidth: 5)
             .frame(width: 300, height: 300)
             .opacity(0.8)
-            .animation(.easeInOut(duration: 0.3), value: viewModel.isFaceWellPositioned)
+            .animation(.easeInOut(duration: 0.3), value: viewModel.isFaceDetected)
+    }
+    
+    // View untuk pesan status
+    private var statusMessageView: some View {
+        Text(viewModel.statusMessage)
+            .fontWeight(.semibold)
+            .foregroundColor(.white)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(Color.black.opacity(0.6))
+            .clipShape(Capsule())
+            .padding(.top, 60)
+            .animation(.easeInOut, value: viewModel.statusMessage)
     }
 }

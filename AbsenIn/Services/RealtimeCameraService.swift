@@ -1,43 +1,16 @@
+// RealtimeCameraService.swift (FINAL - BERSIH - TANPA API ANEH)
+
 import AVFoundation
 import Vision
 import SwiftUI
-import UIKit
-
-extension UIDeviceOrientation {
-    var videoOrientation: AVCaptureVideoOrientation {
-        switch self {
-        case .portrait: return .portrait
-        case .portraitUpsideDown: return .portraitUpsideDown
-        case .landscapeLeft: return .landscapeRight
-        case .landscapeRight: return .landscapeLeft
-        default: return .portrait
-        }
-    }
-    
-    var visionOrientation: CGImagePropertyOrientation {
-        switch self {
-        case .portrait: return .right
-        case .portraitUpsideDown: return .left
-        case .landscapeLeft: return .up
-        case .landscapeRight: return .down
-        default: return .right
-        }
-    }
-}
-
-struct DetectedFace: Identifiable {
-    let id = UUID()
-    let boundingBox: CGRect
-    let recognizedUser: User?
-}
 
 protocol RealtimeCameraServiceDelegate: AnyObject {
-    @MainActor func cameraService(didDetect faces: [DetectedFace])
+    @MainActor func cameraService(didDetect observations: [VNFaceObservation], recognizedUsers: [UUID: User?])
 }
 
 struct CachedUser {
     let user: User
-    let facialVectors: [FacialVector]
+    let featurePrints: [VNFeaturePrintObservation]
 }
 
 class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -45,24 +18,22 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     let session = AVCaptureSession()
     weak var delegate: RealtimeCameraServiceDelegate?
     
+    private(set) var videoDevice: AVCaptureDevice?
+    private var videoOutput = AVCaptureVideoDataOutput()
     private var isPrepared = false
-    private let recognitionThreshold: Float = 0.08
-    
-    // PERBAIKAN UTAMA: Parameter baru untuk mencegah salah identifikasi.
-    // Ini adalah jarak minimal yang dibutuhkan antara kandidat terbaik #1 dan #2.
-    // Naikkan nilai ini untuk membuatnya lebih ketat.
-    private let ambiguityRejectionThreshold: Float = 0.05
     
     private var cachedUsers: [CachedUser] = []
-    private var isProcessingFrame = false
     
+    private var isProcessingFrame = false
+    private var isRecognitionLocked = false
+
     func updateRegisteredUsers(_ users: [User]) {
         cachedUsers = users.compactMap { user in
             guard let data = user.facialVectorData,
-                  let vectors = try? JSONDecoder().decode([FacialVector].self, from: data) else {
+                  let prints = try? NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(data) as? [VNFeaturePrintObservation] else {
                 return nil
             }
-            return CachedUser(user: user, facialVectors: vectors)
+            return CachedUser(user: user, featurePrints: prints)
         }
     }
     
@@ -79,11 +50,11 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
         session.beginConfiguration()
         defer { session.commitConfiguration() }
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else { return false }
+        self.videoDevice = device
         do {
             let input = try AVCaptureDeviceInput(device: device)
             if session.canAddInput(input) { session.addInput(input) } else { return false }
-        } catch { print("Gagal membuat input kamera: \(error)"); return false }
-        let videoOutput = AVCaptureVideoDataOutput()
+        } catch { return false }
         videoOutput.alwaysDiscardsLateVideoFrames = true
         videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue", qos: .userInitiated))
         if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) } else { return false }
@@ -99,109 +70,125 @@ class RealtimeCameraService: NSObject, ObservableObject, AVCaptureVideoDataOutpu
     func stopSession() {
         if session.isRunning { session.stopRunning() }
     }
-    
+
+    // =================================================================
+    // KEMBALI KE LOGIKA YANG SEDERHANA DAN BENAR
+    // =================================================================
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard !isProcessingFrame, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        
         isProcessingFrame = true
         
-        let visionOrientation = UIDevice.current.orientation.visionOrientation
-
-        let faceLandmarksRequest = VNDetectFaceLandmarksRequest { (request, error) in
-            defer { self.isProcessingFrame = false }
-            
-            guard let faceObservations = request.results as? [VNFaceObservation] else {
-                DispatchQueue.main.async { self.delegate?.cameraService(didDetect: []) }
+        // HANYA DETEKSI KOTAK WAJAH. TIDAK PERLU LANDMARKS.
+        let faceDetectionRequest = VNDetectFaceRectanglesRequest { [weak self] (request, error) in
+            guard let self = self,
+                  let faceObservations = request.results as? [VNFaceObservation],
+                  !faceObservations.isEmpty else {
+                
+                DispatchQueue.main.async { self?.delegate?.cameraService(didDetect: [], recognizedUsers: [:]) }
+                self?.isProcessingFrame = false
                 return
             }
             
-            self.process(faceObservations: faceObservations)
+            // Proses wajah yang ditemukan
+            self.process(faceObservations: faceObservations, in: pixelBuffer)
         }
-        
+        faceDetectionRequest.revision = VNDetectFaceRectanglesRequestRevision3
+
         do {
-            try VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: visionOrientation).perform([faceLandmarksRequest])
+            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
+            try handler.perform([faceDetectionRequest])
         } catch {
-            print("Gagal melakukan request deteksi wajah: \(error)"); isProcessingFrame = false
+            print("Gagal deteksi wajah: \(error)")
+            isProcessingFrame = false
         }
     }
-    
-    private func process(faceObservations: [VNFaceObservation]) {
-        if faceObservations.isEmpty {
-            DispatchQueue.main.async { self.delegate?.cameraService(didDetect: []) }
+
+    private func process(faceObservations: [VNFaceObservation], in pixelBuffer: CVPixelBuffer) {
+        if isRecognitionLocked {
+            DispatchQueue.main.async {
+                self.delegate?.cameraService(didDetect: faceObservations, recognizedUsers: [:])
+            }
+            isProcessingFrame = false
             return
         }
-        
+
+        let recognitionHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
+        var recognitionResults: [UUID: User?] = [:]
         let dispatchGroup = DispatchGroup()
-        var recognitionResults: [DetectedFace] = []
-        
+
         for face in faceObservations {
             dispatchGroup.enter()
             
-            guard let landmarks = face.landmarks, let liveVector = landmarks.toFacialVector() else {
-                dispatchGroup.leave()
-                continue
+            let featurePrintRequest = VNGenerateImageFeaturePrintRequest()
+            // GUNAKAN regionOfInterest, INI CARA YANG BENAR.
+            featurePrintRequest.regionOfInterest = face.boundingBox
+
+            do {
+                try recognitionHandler.perform([featurePrintRequest])
+                if let liveFeaturePrint = featurePrintRequest.results?.first {
+                    let recognizedUser = self.verify(liveFeaturePrint: liveFeaturePrint)
+                    recognitionResults[face.uuid] = recognizedUser
+                    
+                    if recognizedUser != nil {
+                        self.isRecognitionLocked = true
+                    }
+                } else {
+                    recognitionResults[face.uuid] = nil
+                }
+            } catch {
+                recognitionResults[face.uuid] = nil
             }
-            
-            let recognizedUser = self.verify(liveVector: liveVector)
-            recognitionResults.append(DetectedFace(boundingBox: face.boundingBox, recognizedUser: recognizedUser))
-            
             dispatchGroup.leave()
         }
-        
-        dispatchGroup.notify(queue: .global()) {
-            DispatchQueue.main.async {
-                self.delegate?.cameraService(didDetect: recognitionResults)
-            }
-        }
-    }
-    
-    // PERBAIKAN TOTAL: Logika verifikasi yang benar dengan Penolakan Ambiguitas.
-    private func verify(liveVector: FacialVector) -> User? {
-        var allMatches: [(user: User, distance: Float)] = []
 
-        // 1. Hitung skor terbaik untuk SETIAP pengguna yang terdaftar.
-        for cachedUser in self.cachedUsers {
-            var minDistanceForThisUser: Float = .greatestFiniteMagnitude
-            
-            for storedVector in cachedUser.facialVectors {
-                let currentDistance = Float(liveVector.distance(to: storedVector))
-                if currentDistance < minDistanceForThisUser {
-                    minDistanceForThisUser = currentDistance
+        dispatchGroup.notify(queue: .global()) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.delegate?.cameraService(didDetect: faceObservations, recognizedUsers: recognitionResults)
+                if self.isRecognitionLocked {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                        self.isRecognitionLocked = false
+                    }
                 }
+                self.isProcessingFrame = false
             }
-            allMatches.append((user: cachedUser.user, distance: minDistanceForThisUser))
         }
-        
-        // 2. Urutkan semua hasil dari yang terbaik (jarak terendah) ke terburuk.
-        allMatches.sort { $0.distance < $1.distance }
-        
-        // 3. Ambil kandidat terbaik. Jika tidak ada, langsung gagal.
-        guard let bestMatch = allMatches.first else {
-            return nil
-        }
-        
-        // 4. Periksa apakah kandidat terbaik ini cukup bagus (di bawah ambang batas).
-        guard bestMatch.distance < self.recognitionThreshold else {
-            return nil
-        }
-        
-        // 5. Logika Anti-Ambiguitas:
-        // Jika hanya ada satu pengguna terdaftar, tidak ada ambiguitas. Langsung kembalikan.
-        guard allMatches.count > 1 else {
-            return bestMatch.user
-        }
-        
-        // Ambil kandidat terbaik kedua.
-        let secondBestMatch = allMatches[1]
-        
-        // Hitung selisih/kesenjangan antara skor terbaik #1 dan #2.
-        let gap = secondBestMatch.distance - bestMatch.distance
-        
-        // Jika kesenjangannya terlalu kecil, berarti sistem "bingung". Tolak pemindaian.
-        guard gap > self.ambiguityRejectionThreshold else {
-            return nil
-        }
-        
-        // Jika semua pemeriksaan lolos, ini adalah kecocokan yang percaya diri.
-        return bestMatch.user
     }
-}¡™¡™
+
+    private func verify(liveFeaturePrint: VNFeaturePrintObservation) -> User? {
+        var closestMatch: (user: User, distance: Float)? = nil
+
+        for cachedUser in self.cachedUsers {
+            var bestDistanceForThisUser: Float = .greatestFiniteMagnitude
+            
+            for storedPrint in cachedUser.featurePrints {
+                do {
+                    var distance: Float = 0.0
+                    try liveFeaturePrint.computeDistance(&distance, to: storedPrint)
+                    
+                    if distance < bestDistanceForThisUser {
+                        bestDistanceForThisUser = distance
+                    }
+                } catch { continue }
+            }
+            
+            if closestMatch == nil || bestDistanceForThisUser < closestMatch!.distance {
+                closestMatch = (user: cachedUser.user, distance: bestDistanceForThisUser)
+            }
+        }
+        
+        guard let bestMatch = closestMatch else { return nil }
+        
+        // KUNCI UTAMA ADA DI SINI. KITA PAKAI THRESHOLD SUPER KETAT.
+        let threshold: Float = 0.8
+        
+        print("Jarak terdekat: \(bestMatch.user.name) (\(String(format: "%.4f", bestMatch.distance))) | Ambang batas: \(threshold)")
+        
+        if bestMatch.distance < threshold {
+            return bestMatch.user
+        } else {
+            return nil
+        }
+    }
+}

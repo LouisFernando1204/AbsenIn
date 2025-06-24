@@ -4,18 +4,12 @@ import UIKit
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
-    // THE FIX: Use a closure to pass the layer back. This is the correct pattern.
-    var onLayerCreated: ((AVCaptureVideoPreviewLayer) -> Void)? = nil
+    let videoDevice: AVCaptureDevice?
+    let videoGravity: AVLayerVideoGravity = .resizeAspectFill
 
     func makeUIView(context: Context) -> CameraPreviewUIView {
-        let view = CameraPreviewUIView(session: session)
-        view.previewLayer.videoGravity = .resizeAspectFill
-        
-        // If the closure was provided, call it to pass the layer back.
-        if let onLayerCreated = self.onLayerCreated {
-            onLayerCreated(view.previewLayer)
-        }
-        
+        let view = CameraPreviewUIView(session: session, device: videoDevice)
+        view.previewLayer.videoGravity = self.videoGravity
         return view
     }
 
@@ -23,66 +17,53 @@ struct CameraPreview: UIViewRepresentable {
 }
 
 class CameraPreviewUIView: UIView {
-    // THE FIX: This is now a standard stored property.
     let previewLayer: AVCaptureVideoPreviewLayer
+    private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
 
-    init(session: AVCaptureSession) {
+    init(session: AVCaptureSession, device: AVCaptureDevice?) {
         self.previewLayer = AVCaptureVideoPreviewLayer(session: session)
         super.init(frame: .zero)
         
         self.layer.addSublayer(previewLayer)
         
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(deviceDidRotate),
-            name: UIDevice.orientationDidChangeNotification,
-            object: nil
-        )
+        if let device = device {
+            self.rotationCoordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: self.previewLayer)
+        }
     }
 
-    // THE FIX: This required initializer was missing.
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        updateVideoOrientation()
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         previewLayer.frame = self.bounds
-    }
-
-    @objc private func deviceDidRotate() {
         updateVideoOrientation()
     }
-
+    
     private func updateVideoOrientation() {
-        guard let connection = previewLayer.connection, connection.isVideoOrientationSupported else { return }
+        guard let interfaceOrientation = self.window?.windowScene?.interfaceOrientation else { return }
         
-        guard let scene = self.window?.windowScene else { return }
-        let interfaceOrientation = scene.interfaceOrientation
+        let videoRotationAngle: CGFloat
         
-        let videoOrientation: AVCaptureVideoOrientation
         switch interfaceOrientation {
         case .portrait:
-            videoOrientation = .portrait
+            videoRotationAngle = 90
         case .portraitUpsideDown:
-            videoOrientation = .portraitUpsideDown
-        case .landscapeLeft:
-            videoOrientation = .landscapeLeft
+            videoRotationAngle = 270
         case .landscapeRight:
-            videoOrientation = .landscapeRight
+            videoRotationAngle = 180
+        case .landscapeLeft:
+            videoRotationAngle = 0
+        case .unknown:
+            // Jika orientasi tidak diketahui, default ke potret.
+            videoRotationAngle = 90
         default:
-            videoOrientation = .portrait
+            // Default ini akan menangkap kasus-kasus baru di masa depan
+            // dan menjamin switch ini 100% exhaustive.
+            videoRotationAngle = 90
         }
         
-        connection.videoOrientation = videoOrientation
-    }
-    
-    deinit {
-        NotificationCenter.default.removeObserver(self)
+        previewLayer.connection?.videoRotationAngle = videoRotationAngle
     }
 }

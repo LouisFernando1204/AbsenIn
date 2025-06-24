@@ -30,7 +30,6 @@ struct PhotoRegistrationFlowView: View {
     @State private var path = NavigationPath()
     var onComplete: () -> Void
     
-    // THE FIX: Get the dismiss action from the environment.
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -40,7 +39,6 @@ struct PhotoRegistrationFlowView: View {
                 PhotoTakingView(userName: name, onFinished: onComplete)
             }
         }
-        // THE FIX: Add a toolbar with a close button to the entire navigation flow.
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button(action: {
@@ -60,7 +58,7 @@ struct EnterNameView: View {
     var body: some View {
         VStack(spacing: 20) {
             Spacer(); Image(systemName: "person.text.rectangle").font(.system(size: 60)).foregroundColor(.accentColor)
-            Text("Siapa Nama Anda?").font(.largeTitle).fontWeight(.bold)
+            Text("Registrasi Karyawan?").font(.largeTitle).fontWeight(.bold)
             Text("Masukkan nama lengkap Anda untuk memulai proses pendaftaran wajah.").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal)
             TextField("Nama Lengkap", text: $userName).textFieldStyle(RoundedBorderTextFieldStyle()).padding(.horizontal, 40).submitLabel(.done)
             Spacer()
@@ -85,63 +83,85 @@ struct PhotoTakingView: View {
 
     var body: some View {
         VStack {
-            if viewModel.isFinished { SavingView() }
-            else {
+            if viewModel.isFinished {
+                SavingView()
+            } else {
                 ZStack {
-                    CameraPreview(session: viewModel.photoService.session)
-                        .ignoresSafeArea()
-                        .onAppear { viewModel.photoService.startRunning() }
-                        .onDisappear { viewModel.photoService.stopRunning() }
+                    CameraPreview(
+                        session: viewModel.photoService.session,
+                        videoDevice: viewModel.photoService.videoDevice
+                    )
+                    .ignoresSafeArea()
+                    .onAppear { viewModel.photoService.startRunning() }
+                    .onDisappear { viewModel.photoService.stopRunning() }
+
                     VStack {
-                        InstructionView(instruction: viewModel.currentInstruction, status: viewModel.statusMessage)
+                        InstructionView(status: viewModel.statusMessage)
                         Spacer()
-                        ProgressIndicatorView(totalPoses: viewModel.totalPoses, currentPoseIndex: viewModel.currentPoseIndex, photosForCurrentPose: viewModel.photosForCurrentPoseCount)
-                    }.padding(.vertical, 40)
+                        ProgressViewSection(count: viewModel.photosCapturedCount, total: 25)
+                    }
+                    .padding(.vertical, 40)
                 }
             }
         }
-        .navigationTitle("Pendaftaran Wajah").navigationBarTitleDisplayMode(.inline).navigationBarBackButtonHidden(true)
+        .navigationTitle("Pendaftaran Wajah")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .onAppear { viewModel.startRegistration() }
         .onReceive(viewModel.$isFinished) { finished in
-            if finished { viewModel.saveUser(context: modelContext, completion: onFinished) }
+            if finished {
+                viewModel.saveUser(context: modelContext, completion: onFinished)
+            }
         }
     }
-    
+
     struct InstructionView: View {
-        let instruction: String
         let status: String
         var body: some View {
             VStack {
-                Text(instruction).font(.title2).fontWeight(.bold)
-                Text(status).font(.subheadline).opacity(status.isEmpty ? 0 : 1)
+                Text("Lihat lurus ke depan dan tahan")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                Text(status)
+                    .font(.subheadline)
+                    .opacity(status.isEmpty ? 0 : 1)
             }
-            .foregroundColor(.white).padding().background(Color.black.opacity(0.6)).cornerRadius(10).animation(.easeInOut, value: status)
+            .foregroundColor(.white)
+            .padding()
+            .background(Color.black.opacity(0.6))
+            .cornerRadius(10)
+            .animation(.easeInOut, value: status)
         }
     }
-    
-    struct ProgressIndicatorView: View {
-        let totalPoses: Int
-        let currentPoseIndex: Int
-        let photosForCurrentPose: Int
+
+    struct ProgressViewSection: View {
+        let count: Int
+        let total: Int
+
         var body: some View {
             VStack(spacing: 15) {
-                Text("Pose \(min(currentPoseIndex + 1, totalPoses)) dari \(totalPoses)")
-                    .font(.headline).foregroundColor(.white)
-                HStack(spacing: 10) {
-                    ForEach(0..<5) { index in
-                        Circle().fill(index < photosForCurrentPose ? Color.green : Color.white.opacity(0.5)).frame(width: 15, height: 15)
-                    }
-                }
-                .animation(.default, value: photosForCurrentPose)
+                Text("Mengambil foto \(count) dari \(total)")
+                    .font(.headline)
+                    .foregroundColor(.white)
+
+                ProgressView(value: Float(count), total: Float(total))
+                    .progressViewStyle(LinearProgressViewStyle(tint: .green))
+                    .frame(width: 200)
             }
-            .padding().background(Color.black.opacity(0.6)).cornerRadius(10)
+            .padding()
+            .background(Color.black.opacity(0.6))
+            .cornerRadius(10)
         }
     }
-    
+
     struct SavingView: View {
         var body: some View {
             VStack(spacing: 20) {
-                Spacer(); ProgressView(); Text("Menyimpan data, mohon tunggu...").font(.headline); Spacer()
+                Spacer()
+                ProgressView()
+                Text("Menyimpan data, mohon tunggu...")
+                    .font(.headline)
+                Spacer()
             }
         }
     }

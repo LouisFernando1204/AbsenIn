@@ -1,71 +1,62 @@
+// FacialVector.swift (atau file ekstensi Anda)
+
 import Foundation
 import Vision
 
+// Struct ini tidak berubah
 struct FacialVector: Codable {
-    let leftEyeToNose: CGFloat
-    let rightEyeToNose: CGFloat
-    let mouthWidthToPupilDistance: CGFloat
-    let noseToMouthCenter: CGFloat
-    let leftEyeToMouthCorner: CGFloat
-    let rightEyeToMouthCorner: CGFloat
-    let noseToChin: CGFloat
-    let eyeToEyebrow: CGFloat
-    let jawWidthToPupilDistance: CGFloat
-    let mouthToChin: CGFloat
-
-    func distance(to other: FacialVector) -> CGFloat {
-        let errors = [
-            abs(self.leftEyeToNose - other.leftEyeToNose),
-            abs(self.rightEyeToNose - other.rightEyeToNose),
-            abs(self.mouthWidthToPupilDistance - other.mouthWidthToPupilDistance),
-            abs(self.noseToMouthCenter - other.noseToMouthCenter),
-            abs(self.leftEyeToMouthCorner - other.leftEyeToMouthCorner),
-            abs(self.rightEyeToMouthCorner - other.rightEyeToMouthCorner),
-            abs(self.noseToChin - other.noseToChin),
-            abs(self.eyeToEyebrow - other.eyeToEyebrow),
-            abs(self.jawWidthToPupilDistance - other.jawWidthToPupilDistance),
-            abs(self.mouthToChin - other.mouthToChin)
-        ]
-        return errors.reduce(0, +) / CGFloat(errors.count)
+    let values: [Float]
+    
+    func euclideanDistance(to other: FacialVector) -> Float {
+        guard values.count == other.values.count else { return .greatestFiniteMagnitude }
+        
+        let sumOfSquaredDifferences = zip(values, other.values)
+            .map { $0 - $1 }
+            .map { $0 * $0 }
+            .reduce(0, +)
+        
+        return sqrt(sumOfSquaredDifferences)
     }
 }
 
+// PERBAIKAN UTAMA FINAL: Ganti ekstensi VNFaceLandmarks2D Anda dengan yang ini
 extension VNFaceLandmarks2D {
+    
     func toFacialVector() -> FacialVector? {
-        func distance(_ p1: CGPoint, _ p2: CGPoint) -> CGFloat {
-            return hypot(p2.x - p1.x, p2.y - p1.y)
-        }
-
-        guard let leftPupil = self.leftPupil?.normalizedPoints.first,
-              let rightPupil = self.rightPupil?.normalizedPoints.first,
-              let nose = self.nose?.normalizedPoints.first,
-              let leftMouth = self.outerLips?.normalizedPoints.first,
-              let rightMouth = self.outerLips?.normalizedPoints.last,
-              let faceContourPoints = self.faceContour?.normalizedPoints,
-              let chinPoint = faceContourPoints.min(by: { $0.y < $1.y }),
-              let leftEyebrow = self.leftEyebrow?.normalizedPoints.first,
-              let rightEyebrow = self.rightEyebrow?.normalizedPoints.first,
-              let leftJaw = faceContourPoints.first,
-              let rightJaw = faceContourPoints.last
-        else { return nil }
-
-        let pupilDistance = distance(leftPupil, rightPupil)
-        guard pupilDistance > 0 else { return nil }
+        // 1. Gunakan fitur internal yang stabil.
+        let allPoints = [
+            self.leftEye, self.rightEye,
+            self.leftEyebrow, self.rightEyebrow, self.nose,
+            self.noseCrest, self.medianLine, self.outerLips, self.innerLips
+        ].compactMap { $0?.normalizedPoints }.flatMap { $0 }
         
-        let mouthCenter = CGPoint(x: (leftMouth.x + rightMouth.x) / 2, y: (leftMouth.y + rightMouth.y) / 2)
-        let avgEyebrowToEyeDist = (distance(leftPupil, leftEyebrow) + distance(rightPupil, rightEyebrow)) / 2
-
-        return FacialVector(
-            leftEyeToNose: distance(leftPupil, nose) / pupilDistance,
-            rightEyeToNose: distance(rightPupil, nose) / pupilDistance,
-            mouthWidthToPupilDistance: distance(leftMouth, rightMouth) / pupilDistance,
-            noseToMouthCenter: distance(nose, mouthCenter) / pupilDistance,
-            leftEyeToMouthCorner: distance(leftPupil, leftMouth) / pupilDistance,
-            rightEyeToMouthCorner: distance(rightPupil, rightMouth) / pupilDistance,
-            noseToChin: distance(nose, chinPoint) / pupilDistance,
-            eyeToEyebrow: avgEyebrowToEyeDist / pupilDistance,
-            jawWidthToPupilDistance: distance(leftJaw, rightJaw) / pupilDistance,
-            mouthToChin: distance(mouthCenter, chinPoint) / pupilDistance
-        )
+        guard !allPoints.isEmpty else { return nil }
+        
+        // 2. Lakukan normalisasi kustom PADA TITIK YANG SUDAH DINORMALISASI VISION.
+        // Ini membuat vektor kebal terhadap posisi, ukuran, DAN rasio aspek bounding box.
+        guard let leftPupil = self.leftPupil?.normalizedPoints.first,
+              let rightPupil = self.rightPupil?.normalizedPoints.first else {
+            return nil // Butuh mata untuk normalisasi
+        }
+        
+        // Titik pusat yang stabil
+        let centerPoint = CGPoint(x: (leftPupil.x + rightPupil.x) / 2,
+                                  y: (leftPupil.y + rightPupil.y) / 2)
+        
+        // Skala yang stabil (jarak antar mata)
+        let interocularDistance = hypot(leftPupil.x - rightPupil.x, leftPupil.y - rightPupil.y)
+        guard interocularDistance > 0 else { return nil }
+        
+        // 3. Normalisasi setiap titik terhadap pusat dan skala yang baru.
+        let normalizedPoints = allPoints.map { point -> (Float, Float) in
+            let translatedX = Float(point.x - centerPoint.x) / Float(interocularDistance)
+            let translatedY = Float(point.y - centerPoint.y) / Float(interocularDistance)
+            return (translatedX, translatedY)
+        }
+        
+        // 4. Ratakan (flatten) menjadi satu array.
+        let finalVectorValues = normalizedPoints.flatMap { [$0.0, $0.1] }
+        
+        return FacialVector(values: finalVectorValues)
     }
 }
